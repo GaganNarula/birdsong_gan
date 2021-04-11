@@ -1,0 +1,6 @@
+
+%run train_without_age.py --training_path '/media/songbird/datapartition/id_list_train.pkl' --test_path '/media/songbird/datapartition/id_list_test.pkl' --outf '/media/songbird/datapartition/mdgan_output/nz_32_bnorm_midage_layernorm/' --external_file_path '/media/songbird/datapartition/mdgan_training_input_with_age_HDF/' --subset_age_weights 0. 0.9 --batchSize 64 --lr 3e-5 --nz 32 --niter 5 --ngf 264 --ndf 128 --imageW 16 --manualSeed 9009 --lambdaa 99 --z_reg --zreg_weight 1 --noise_dist 'normal' --log_every 500
+
+
+
+%run train_residual.py --training_path '/home/gagan/data/zudeep/bird_hdfs/id_list_train.pkl' --test_path '/home/gagan/data/zudeep/bird_hdfs/id_list_test.pkl' --outf '/home/gagan/data/zudeep/models/nz_16_layernorm' --subset_age_weights 0. 0.99 --batchSize 64 --lr 2e-5 --nz 16 --niter 10 --ngf 128 --ndf 256 --manualSeed 9209 --lambdaa 100 --z_var 1. --log_every 500 --cuda
