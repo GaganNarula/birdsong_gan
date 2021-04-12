@@ -1,9 +1,12 @@
 from hmm_utils import *
+from hmm_opts import hmm_opts
 import pdb
 import warnings
 warnings.filterwarnings("ignore")
 
 
+# random state
+RNG = 0
 
 def learnKmodels_getbest(data, lastmodel, Lengths, hidden_size, hmm_opts, restarts = 10):
     ''' EM based HMM learning with multiple initializations '''
@@ -52,8 +55,8 @@ def learn_single_hmm_gauss_with_initialization(data, lastmodel = None, lengths =
     """
     if lastmodel is None:
         model = GaussianHMM(n_components=K, covariance_type=covtype, transmat_prior=transmat_prior, \
-                       random_state=0, n_iter = n_iter, covars_prior=covars_prior*np.ones(K),params=fit_params, 
-                        init_params = 'stmc', verbose=False, tol=tol)
+                       random_state=RNG, n_iter = n_iter, covars_prior=covars_prior*np.ones(K),params=fit_params, 
+                        init_params = 'st', verbose=False, tol=tol)
         # for hmmlearn vesion 0.2.3
         fake_init_data = np.random.multivariate_normal(mean=np.zeros(data.shape[1]),
                                                        cov=init_cov*np.eye(data.shape[1],
@@ -90,7 +93,7 @@ def load_z_data_and_learn(dataset, lastmodel, idx, hidden_size, netE, netG, outp
     
     # split into train and validation
     ids = np.random.permutation(len(Z))
-    ntrain = int(0.7 * len(ids))
+    ntrain = int(hmm_opts['train_proportion'] * len(ids))
     ztrain = [Z[ids[i]] for i in range(ntrain)]
     ztest = [Z[ids[i]] for i in range(ntrain, len(ids))]
     
@@ -211,22 +214,23 @@ def train_models(args):
         
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--datapath')
-parser.add_argument('--netGpath')
-parser.add_argument('--netEpath')
-parser.add_argument('--outpath')
+parser.add_argument('--datapath', type = str)
+parser.add_argument('--netGpath', type = str, help = 'path to generator neural network')
+parser.add_argument('--netEpath', type = str, help = 'path to encoder neural network')
+parser.add_argument('--outpath', type = str, help = 'where to save models and samples')
 parser.add_argument('--do_chaining', action = 'store_true')
 parser.add_argument('--hidden_state_size', type = int, nargs = '+', default = [5, 10, 15, 20, 30, 50, 75, 100])
+parser.add_argument('--nz', type = int, default = 16, help = 'latent space dimensions')
 parser.add_argument('--covariance_type', type = str, default = 'spherical')
-parser.add_argument('--covars_prior', type = float, default = 1.)
-parser.add_argument('--fit_params', type = str, default = 'stm')
-parser.add_argument('--transmat_prior', type = float, default = 1.)
-parser.add_argument('--n_iter', type = int, default = 400)
+parser.add_argument('--covars_prior', type = float, default = 1., help ='diagnoal term weight on the prior covariance')
+parser.add_argument('--fit_params', type = str, default = 'stmc', help = 'which parameters to fit, s = startprob, t = transmat, m = means, c = covariances')
+parser.add_argument('--transmat_prior', type = float, default = 1., help = 'transition matrix prior concentration')
+parser.add_argument('--n_iter', type = int, default = 400, help = 'number of EM iterations')
 parser.add_argument('--tolerance', type = float, default = 0.01)
-parser.add_argument('--get_audio', action = 'store_true')
-parser.add_argument('--start_from', type = int, default = 0)
-parser.add_argument('--last_day', type = int, default = -1)
-parser.add_argument('--min_seq_multiplier', type = int ,default = 3)
+parser.add_argument('--get_audio', action = 'store_true', help = 'generate audio files as well')
+parser.add_argument('--start_from', type = int, default = 0, help = 'start day of learning') 
+parser.add_argument('--last_day', type = int, default = -1, help = 'last day of learning')
+parser.add_argument('--min_seq_multiplier', type = int ,default = 3, help='the number of files should be at least hidden size x this factor')
 
 
 if __name__ == '__main__':

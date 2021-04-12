@@ -2,7 +2,9 @@ import sys
 sys.path.append(r'/home/gagan/code/birdsong_gan/birdsong_gan')
 from hmmlearn.hmm import GaussianHMM, MultinomialHMM
 import torch
-from utils.utils import encode, decode_by_batch, load_netE, load_netG
+import numpy as np
+import matplotlib.pyplot as plt
+from utils.utils import encode, decode_by_batch, transform, inverse_transform, save_audio_sample, rescale_spectrogram
 from models.nets_16col_layernorm import _netG, _netE, weights_init
 import argparse
 import joblib
@@ -10,33 +12,10 @@ from joblib import Parallel, delayed
 from time import time
 from scipy.stats import entropy, multivariate_normal
 import h5py
+import os
 
-REDUCING_K = [200, 200, 200, 200, 200, 200, 200, 200, 190, 190, 190, 180, 180, 180, 170, 
-              170, 160, 160, 150, 150, 140, 140, 130, 120, 110, 100, 90, 80, 70, 60, 60, 
-              60, 60, 60, 60, 60, 60, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50 ]
 
-hmm_opts = {'hidden_state_size' : 100,
-           'covariance_type' : 'spherical', 
-           'fitted_params' : 'stm',
-           'transmat_prior' : 1.,
-           'n_iter' : 300,
-           'tolerance' : 0.01,
-           'nz' : 32, 
-           'ngf' : 264,
-           'nc' : 1,
-            'covars_prior' : 1.,
-            'imageH': 129,
-           'imageW': 16,
-           'batchsize' : 2,
-           'nsamplesteps' : 128,
-           'nsamps': 10,
-           'sample_var': 0.1,
-            'sample_invtemperature' : 1.,
-            'init_cov': 0.1,
-            'n_restarts': 10,
-            'do_chaining': False,
-            'min_seq_multiplier': 3
-           }
+
 
 
 def tempered_sampling(model, beta=3., timesteps=64, sample_obs=True, start_state_max=False, sample_var = 0):
@@ -382,4 +361,24 @@ def create_output(model, outpath, hidden_size, idx, hmm_opts, netG, sequence=[],
                               os.path.join(outputfolder,
                                            'hiddenstatesize_'+str(hidden_size)+'_sample_'+str(j)+'.wav'),
                                  hmm_opts['sample_rate'])
-            
+
+                
+def load_netG(netG_file_path, ngpu = 1, nz = 16, ngf = 128, nc = 1, cuda = False):
+    netG = _netG(nz, ngf, nc)
+    netG.apply(weights_init)
+    netG.load_state_dict(torch.load(netG_file_path))
+
+    if cuda:
+        netG.cuda()
+    netG.mode(reconstruction=True)
+    return netG
+
+
+def load_netE(netE_file_path, ngpu = 1, nz = 16, ngf = 128, nc = 1, cuda = False):
+    netE = _netE(nz, ngf, nc)
+    netE.apply(weights_init)
+    netE.load_state_dict(torch.load(netE_file_path))
+
+    if cuda:
+        netE.cuda()
+    return netE
