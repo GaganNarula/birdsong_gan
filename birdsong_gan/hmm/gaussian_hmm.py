@@ -5,7 +5,7 @@ import pdb
 
 
 
-class HMM(object):
+class GaussHMM(object):
     def __init__(self, K, D = 2, learn_params = 'stmc', 
                  startprob_prior_conc_weight = 1., 
                  transmat_prior_conc_weight = 1.,
@@ -37,13 +37,12 @@ class HMM(object):
         self.means = multivariate_normal.rvs(size = K, mean = self.prior_mean, cov= np.eye(D))
         self.covs = invwishart.rvs(D+2, self.covar_prior, size = K)
         
-    def initKmeans_means_and_covs(self, x):
-        from sklearn.cluster import KMeans
-        kms = KMeans(n_clusters = self.nstates)
-        kms.fit(x)
-        self.means = kms.cluster_centers_
-        for k in range(self.nstates):
-            self.covs[k] = np.cov(x[kms.labels_ == k], rowvar=False) + 1e-4*np.eye(self.D)
+    def init_gmm_means_and_covs(self, x, K, covtype = 'diag'):
+        from sklearn.mixture import GaussianMixture
+        gmm = GaussianMixture(n_components = K, covariance_type = covtype, 
+                             random_state = 0, reg_covar = 1e-4)
+        gmm.fit(x)
+        return gmm.means_, gmm.covariances_
             
     def init_stats(self):
         stats = {}
@@ -137,23 +136,20 @@ class HMM(object):
         return alphahat, betahat, gamma, sigma, c
 
     def _update_mean_stats(self, y, gamma):
-        ''' mean update statistics '''
+        """ mean update statistics """ 
         M = []
         for k in range(self.nstates):
-            mu = np.tile(gamma[:,k].reshape(-1,1),(1,self.D)) \
-                    *(y + np.tile(self.prior_mean.reshape(1,-1),(len(y),1)))
+            mu = np.tile(gamma[:,k].reshape(-1,1),(1,self.D)) * y 
             M.append(mu.sum(axis=0))
-        return np.stack(M)
+        return np.stack(M) 
     
     def _update_cov_stats(self, y, gamma):
         ''' covariance update statistics '''
         stats = []
         T = len(y)
         for k in range(self.nstates):
-            mu_mu = np.outer(self.means_old[k],self.means_old[k])
-            S = [(np.outer(y[t] - self.means_old[k],y[t] - self.means_old[k]) \
-                 + mu_mu + self.covar_prior)*gamma[t,k] for t in range(T)]
-            # stack and sum over time steps
+            S = [np.outer(y[t] - self.means_old[k],y[t] - self.means_old[k])*gamma[t,k] for t in range(T)]
+            # stack on time axis and sum over time steps
             S = np.stack(S,axis=0).sum(axis=0)
             stats.append(S)
         return np.stack(stats)
@@ -180,28 +176,38 @@ class HMM(object):
         '''
         # update start probability vector
         if 's' in self.learn_params:
-            self.startprob = self.startprob_prior_conc*stats['pi']
+            num = stats['pi'] + self.startprob_prior_conc - 1
+            normalizer = (num.sum() + np.sum(self.startprob_prior_conc) - self.nstates)
+            normalizer = num / normalizer
             # sum over states
             self.startprob /= np.sum(self.startprob)
         # update transition matrix, means and covs
         for k in range(self.nstates):
             if 't' in self.learn_params:
-                num = self.transmat_prior_conc*stats['A'][k,:] 
-                self.transmat[k,:] = num / num.sum()
+                num = stats['A'][k,:] + self.transmat_prior_conc[k] - 1
+                normalizer = (num.sum() + np.sum(self.transmat_prior_conc) - self.nstates)
+                self.transmat[k,:] = num / normalizer
             # for mean
             if 'm' in self.learn_params:
-                self.means[k] = stats['mu'][k]/stats['gammad'][k]
+                self.means[k] = (stats['mu'][k] + self.prior_mean)/(stats['gammad'][k] + 1)
             # for covariance
             if 'c' in self.learn_params:
-                self.covs[k] = stats['cov'][k]/(stats['gammad'][k]*(2*self.D + 4))
-                #self.covs[k] = stats['cov'][k]/(stats['gammad'][k])
+                # prior contribution to numerator
+                mu_mu = np.outer(self.means_old[k],self.means_old[k])
+                prior = mu_mu + self.covar_prior
+                self.covs[k] = (stats['cov'][k] + prior)/(stats['gammad'][k] + (2*self.D + 4))
                                 
-        
-    def fit_many_sequences(self, seqs, log_every = 10):
-        ''' Fit params to several i.i.d sequences
-        '''
+    def score(self, seqs):
+        """ Compute loglikelihood with forward recursion for a list of sequences. 
+        """
+        LL =  [self.forward_recursion_rescaled(x)[1] for x in seqs]
+        return np.sum(LL)
+    
+    def fit(self, seqs, log_every = 10):
+        """ Fit params to several i.i.d sequences
+        """ 
         if self.do_kmeans:
-            self.initKmeans_means_and_covs(np.concatenate(seqs, axis=0))
+            self. init_gmm_means_and_covs(np.concatenate(seqs, axis=0), 'full')
         Lens = [y.shape[0] for y in seqs]
         LLprev = 0.
         for n in range(self.n_iters):
@@ -222,9 +228,9 @@ class HMM(object):
             if self.verbose and i%log_every == 0:
                 print('.....iteration %d, total log LL : %.5f, change : %.5f .....'%(n,LL,delLL))
             
-            #if n>0 and delLL < self.tolerance:
-            #    print('......stopping early.....')
-            #    break
+            if n>0 and np.abs(delLL) < self.tolerance:
+                print('......stopping early.....')
+                break
                 
     def _sample_multinomial_index(self, P, n = 1):
         z = np.random.multinomial(n, P)
