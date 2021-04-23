@@ -388,8 +388,8 @@ if __name__ == '__main__':
                                          rescale_spectrogram(transform(sample)))
                     # save reconstruction
                     zvec = overlap_encode(sample, netE, transform_sample = True, imageW = opts_dict['imageW'],
-                                           noverlap = opts['noverlap'], cuda = opts_dict['cuda'])
-                    spect, audio = overlap_decode(zvec, netG, noverlap = opts['noverlap'], get_audio = opts_dict['get_audio'], 
+                                           noverlap = opts_dict['noverlap'], cuda = opts_dict['cuda'])
+                    spect, audio = overlap_decode(zvec, netG, noverlap = opts_dict['noverlap'], get_audio = opts_dict['get_audio'], 
                                                   cuda = opts_dict['cuda'])
                     # save reconstructed spectrogram
                     spect = rescale_spectrogram(spect)
