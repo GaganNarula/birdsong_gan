@@ -5,13 +5,15 @@ import numpy as np
 
 
 def weights_init(m):
-    if type(m) == nn.Conv2d or type(m) == nn.ConvTranspose2d:
-        m.weight.data.normal_(0.0, 0.01)
-        m.bias.data.fill_(0.01)
-    elif type(m) == nn.Linear:
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1:
+        m.weight.data.normal_(0.0, 0.02)
+    elif classname.find('BatchNorm') != -1:
+        m.weight.data.normal_(1.0, 0.02)
+        m.bias.data.fill_(0)
+    elif classname.find('Linear') != -1:
         m.weight.data.normal_(0.0, 0.02)
         m.bias.data.fill_(0)
-
     
 class _netG(nn.Module):
     def __init__(self, nz, ngf, nc = 1, resks = 3):
@@ -132,9 +134,8 @@ class _netE(nn.Module):
     
     
 class _netD(nn.Module):
-    def __init__(self, ngpu,ndf,nc):
+    def __init__(self, ndf,nc):
         super(_netD, self).__init__()
-        self.ngpu = ngpu
         self.convs = nn.ModuleList([
             nn.Conv2d(nc, ndf, kernel_size=4, stride=(2,2), padding=(1,1), bias=False),
             # size H = (129 +2 -4)/2 + 1 = 64, W = (16 +2 -4)/2 + 1 = 8

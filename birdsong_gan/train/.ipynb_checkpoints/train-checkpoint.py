@@ -1,5 +1,5 @@
 import sys
-sys.path.append(r'/home/songbird/Dropbox/Work/MDGAN_paper/code/birdsong_gan_revised/birdsong_gan')
+sys.path.append(r'/home/gagan/code/birdsong_gan/birdsong_gan')
 import argparse
 import random
 import torch
@@ -14,10 +14,12 @@ from utils.utils import *
 import pdb
 import joblib
 
-EXT_PATH = '/media/songbird/datapartition/mdgan_training_input_with_age_HDF/'
+from configs.cfg import EXT_PATH, SAVE_PATH
+
+
 opts_dict = {'input_path': EXT_PATH,
-       'outf': '/media/songbird/datapartition/mdgan_output/',
-        'age_weights_path': '/media/songbird/datapartition/age_weights_training.pkl',
+       'outf': SAVE_PATH,
+        'age_weights_path': '',
        'distance_fun': 'L1', 'subset_age_weights' : [0., 1.], 'workers': 6, 'batchSize': 128, 
         'imageH': 129, 'imageW': 16, 'noverlap':0, 'nz': 16,'nc': 1, 'ngf': 256, 'ndf': 128,'niter': 50,
        'lr': 1e-5, 'lambdaa': 150, 'zreg_weight': 1, 'schedule_lr':False, 'd_noise': 0.1,
@@ -57,7 +59,6 @@ parser.add_argument('--cuda', action='store_true', help='use gpu')
 
 
 def make_output_folder(path):
-    
     if not os.path.exists(path):
         os.makedirs(path)
     dirs = os.listdir(path)
@@ -387,9 +388,8 @@ if __name__ == '__main__':
                                          rescale_spectrogram(transform(sample)))
                     # save reconstruction
                     zvec = overlap_encode(sample, netE, transform_sample = True, imageW = opts_dict['imageW'],
-                                           noverlap = opts['noverlap'],
-                                           cuda = opts_dict['cuda'])
-                    spect, audio = overlap_decode(zvec, netG, noverlap = opts['noverlap'] get_audio = opts_dict['get_audio'], 
+                                           noverlap = opts['noverlap'], cuda = opts_dict['cuda'])
+                    spect, audio = overlap_decode(zvec, netG, noverlap = opts['noverlap'], get_audio = opts_dict['get_audio'], 
                                                   cuda = opts_dict['cuda'])
                     # save reconstructed spectrogram
                     spect = rescale_spectrogram(spect)
