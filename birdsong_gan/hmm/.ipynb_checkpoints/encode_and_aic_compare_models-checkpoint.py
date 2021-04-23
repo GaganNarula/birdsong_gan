@@ -6,13 +6,13 @@ warnings.filterwarnings("ignore")
 
 
 # random state
-RNG = 0
+RNG = hmm_opts['hmm_random_state']
 
-def learnKmodels_getbest(data, lastmodel, Lengths, hidden_size, hmm_opts, restarts = 10):
+def learnKmodels_getbest(data, lastmodel, Lengths, hidden_size, hmm_opts):
     ''' EM based HMM learning with multiple initializations '''
     models = []
-    LL = np.nan * np.zeros(restarts)
-    for k in range(restarts):
+    LL = np.nan * np.zeros(hmm_opts['restarts'])
+    for k in range(hmm_opts['restarts']):
         try:
             m = learn_single_hmm_gauss_with_initialization(data, lastmodel, Lengths, hidden_size, 
                                                        hmm_opts['covariance_type'], 
@@ -29,6 +29,7 @@ def learnKmodels_getbest(data, lastmodel, Lengths, hidden_size, hmm_opts, restar
     # choose model with highest LL
     best = np.nanargmax(LL)
     return models[best]
+
 
 
 
@@ -56,17 +57,17 @@ def learn_single_hmm_gauss_with_initialization(data, lastmodel = None, lengths =
     if lastmodel is None:
         model = GaussianHMM(n_components=K, covariance_type=covtype, transmat_prior=transmat_prior, \
                        random_state=RNG, n_iter = n_iter, covars_prior=covars_prior*np.ones(K),params=fit_params, 
-                        init_params = 'st', verbose=False, tol=tol)
+                        init_params = 'stmc', verbose=False, tol=tol)
         # for hmmlearn vesion 0.2.3
-        fake_init_data = np.random.multivariate_normal(mean=np.zeros(data.shape[1]),
-                                                       cov=init_cov*np.eye(data.shape[1],
-                                                                             data.shape[1]), 
-                                                       size = data.shape[0])
-        model._init(fake_init_data)
+        #fake_init_data = np.random.multivariate_normal(mean=np.zeros(data.shape[1]),
+        #                                               cov=init_cov*np.eye(data.shape[1],
+        #                                                                     data.shape[1]), 
+        #                                               size = data.shape[0])
+        #model._init(fake_init_data)
         model.fit(data, lengths)
         return model
     model = GaussianHMM(n_components=K, covariance_type=covtype, transmat_prior=transmat_prior, \
-                       random_state=0, n_iter = n_iter, covars_weight=covarweight, params=fit_params, 
+                       random_state=RNG, n_iter = n_iter,  covars_prior=covars_prior*np.ones(K), params=fit_params, 
                         init_params = 'c', verbose=False, tol=tol)
     # initiliaze parameters to last model
     model.transmat_ = lastmodel.transmat_
@@ -96,27 +97,12 @@ def load_z_data_and_learn(dataset, lastmodel, idx, hidden_size, netE, netG, outp
     ntrain = int(hmm_opts['train_proportion'] * len(ids))
     ztrain = [Z[ids[i]] for i in range(ntrain)]
     ztest = [Z[ids[i]] for i in range(ntrain, len(ids))]
-    
     ids_train = ids[:ntrain]
     ids_test = ids[ntrain:]
-    
     # choose some ztrain for saving
     inds_to_save = np.random.choice(len(ztrain), size=hmm_opts['nsamps'])
-    
-    outputfolder = os.path.join(outpath, 'day_'+str(idx)+'_hiddensize_'+str(hidden_size))
-    if not os.path.exists(outputfolder):
-        os.makedirs(outputfolder)
-    # save images of real data
-    for i in inds_to_save:
-        plt.figure(figsize=(50,10))
-        plt.imshow(rescale_spectrogram(X[i]), origin='lower', cmap = 'gray')
-        # real sequence
-        plt.savefig(os.path.join(outputfolder, 
-                             'real_sequence_' + str(i) + '.eps'), dpi = 50, format='eps')
-        plt.close()
-        
-    
     ztosave = [ztrain[i] for i in inds_to_save]
+    
     # get lengths of sequences
     Ltrain = [z.shape[0] for z in ztrain]
     # train HMM 
@@ -137,11 +123,14 @@ def load_z_data_and_learn(dataset, lastmodel, idx, hidden_size, netE, netG, outp
     
     # create 10 samples
     # concatenate the sequences because otherwise they are usually shorter than batch_size
+    outputfolder = os.path.join(outpath, 'day_'+str(idx)+'_hiddensize_'+str(hidden_size))
+    if not os.path.exists(outputfolder):
+        os.makedirs(outputfolder)
     ztosave = np.concatenate(ztosave, axis=0)
-    create_output(model, outpath, hidden_size, idx, hmm_opts, netG, [], nsamps=hmm_opts['nsamps'])
+    create_output(model, outpath, hidden_size, idx, hmm_opts, netG, [])
     
     # save 10 real files
-    create_output(model, outpath, hidden_size, idx, hmm_opts, netG, ztosave, nsamps=hmm_opts['nsamps'])
+    create_output(model, outpath, hidden_size, idx, hmm_opts, netG, ztosave)
     print('# generated samples #')
     
     # get number of active states etc

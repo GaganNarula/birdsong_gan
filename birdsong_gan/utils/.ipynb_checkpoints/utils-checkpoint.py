@@ -174,6 +174,90 @@ def encode(sample, netE, transform_sample=True, batch_size=64, imageH=129, image
     return z
 
 
+def overlap_encode(sample, netE, transform_sample = False, imageW = 16, noverlap = 0,
+                   cuda = True):
+    """Encode a spectrogram in an overlapping manner.
+        Params
+        -------
+            sample : 2D numpy.ndarray, imageH x imageW (height axis is frequency)
+            netE : encoder neural network
+            transform_sample : bool, whether to transform the sample
+            imageW : int, length of spectrogram chunk
+            noverlap : int, overlap between spectrogram chunks
+            cuda : bool, whether to push tensors to gpu
+        Returns
+        -------
+            Z : numpy.ndarray shape = (num_chunks, dimensionality of latent space)
+    """
+    Z = []
+    notdone = True
+    idx = 0
+    with torch.no_grad():
+        while notdone:
+            if idx + imageW > sample.shape[-1]:
+                notdone = False
+                continue
+            # take out a slice 
+            x = sample[:,idx : idx + imageW]
+            if transform_sample:
+                x = transform(x)
+            # to tensor
+            x = torch.from_numpy(x).float()
+            # encode
+            if cuda :
+                x = x.cuda()
+            # reshape
+            x = x.view(1,1,x.size(0),x.size(1))
+            z = netE(x)
+            z = z.cpu().numpy()
+            Z.append(z)
+            idx = idx + imageW - noverlap
+    Z = np.stack(Z, axis=0).squeeze()
+    return Z
+
+
+def overlap_decode(Z, netG, noverlap = 0, get_audio = False, cuda = True):
+    """Overlap decode. For a given numpy array Z of shape 
+        the output spectrogram (and optionally also audio) is created. 
+        Params
+        -------
+            Z : numpy.ndarray, (timesteps , latent_dim)
+            netG : generator neural network
+            noverlap  : how much overlap (in spectrogram frames) between 
+                        consecutive spectrogram chunks
+            get_audio : bool, to generate audio using Griffin Lim
+            cuda : bool, if True pushes computation on gpu
+        Returns
+        -------
+            X : numpy.ndarray, (nfft bins , chunks)
+            X_audio : numpy array, reconstructed audio
+    """
+    X = []
+    X_audio = []
+    idx = 0
+    with torch.no_grad():
+        for i in range(Z.shape[0]):
+            z = torch.from_numpy(Z[i]).float()
+            z = z.view(1, z.size(0), 1, 1)
+            if cuda:
+                z = z.cuda()
+            # reshape
+            x = netG(z).cpu().numpy().squeeze()
+            # take out any overlap slices
+            # first slice is always fully accepted
+            if i > 0:
+                x = x[:, noverlap:]
+            X.append(x)
+            if get_audio:
+                xa = inverse_transform(x, N=500)
+                X_audio.append(xa)
+    X = np.concatenate(X, axis=1)
+    if get_audio:
+        X_audio = np.concatenate(X_audio, axis=1)
+        X_audio = lc.istft(X_audio)*2
+    return X, X_audio
+    
+    
 def encode_and_decode(sample, netE, netG, batch_size=64, method=1, \
                       imageH=129, imageW=8, cuda= True, transform_sample=True, return_tensor=False):
     

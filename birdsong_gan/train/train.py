@@ -19,7 +19,7 @@ opts_dict = {'input_path': EXT_PATH,
        'outf': '/media/songbird/datapartition/mdgan_output/',
         'age_weights_path': '/media/songbird/datapartition/age_weights_training.pkl',
        'distance_fun': 'L1', 'subset_age_weights' : [0., 1.], 'workers': 6, 'batchSize': 128, 
-        'imageH': 129, 'imageW': 16, 'nz': 16,'nc': 1, 'ngf': 256, 'ndf': 128,'niter': 50,
+        'imageH': 129, 'imageW': 16, 'noverlap':0, 'nz': 16,'nc': 1, 'ngf': 256, 'ndf': 128,'niter': 50,
        'lr': 1e-5, 'lambdaa': 150, 'zreg_weight': 1, 'schedule_lr':False, 'd_noise': 0.1,
        'beta1': 0.5, 'cuda': True, 'ngpu': 1, 'nreslayers': 3,
        'netG': '','netE': '','netD1': '','netD2': '','netD3': '','log_every': 300,
@@ -386,16 +386,17 @@ if __name__ == '__main__':
                                          % (opts_dict['outf'], epoch, i), 
                                          rescale_spectrogram(transform(sample)))
                     # save reconstruction
-                    _, spect,_ = encode_and_decode(sample, netE, netG, opts_dict['batchSize'], 1, 
-                                                       opts_dict['imageH'], opts_dict['imageW'], opts_dict['cuda'], 
-                                                       transform_sample=True, return_tensor=False)
+                    zvec = overlap_encode(sample, netE, transform_sample = True, imageW = opts_dict['imageW'],
+                                           noverlap = opts['noverlap'],
+                                           cuda = opts_dict['cuda'])
+                    spect, audio = overlap_decode(zvec, netG, noverlap = opts['noverlap'] get_audio = opts_dict['get_audio'], 
+                                                  cuda = opts_dict['cuda'])
                     # save reconstructed spectrogram
                     spect = rescale_spectrogram(spect)
                     gagan_save_spect('%s/rec_spect_epoch_%03d_batchnumb_%d.eps' % (opts_dict['outf'], epoch, i), spect)
                     
                     if opts_dict['get_audio']:
                         try:
-                            audio = lc.istft(inverse_transform(spect))
                             save_audio_sample(audio,'%s/rec_audio_epoch_%03d_batchnumb_%d.wav' % 
                                                   (opts_dict['outf'], epoch, i),opts_dict['sample_rate'])
                         except:

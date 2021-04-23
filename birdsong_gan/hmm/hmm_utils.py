@@ -4,7 +4,7 @@ from hmmlearn.hmm import GaussianHMM, MultinomialHMM
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from utils.utils import encode, decode_by_batch, transform, inverse_transform, save_audio_sample, rescale_spectrogram
+from utils.utils import encode, decode_by_batch, transform, inverse_transform, save_audio_sample, rescale_spectrogram, overlap_encode, overlap_decode
 from models.nets_16col_layernorm import _netG, _netE, weights_init
 import argparse
 import joblib
@@ -15,7 +15,31 @@ import h5py
 import os
 
 
-
+def munge_sequences(seqs, minlen = 50):
+    """
+        To make sure that the statistics for covariance 
+        calculation are robust, elongate each sequence.
+    """
+    seqs_out = []
+    x = []
+    for i in range(len(seqs)):
+        
+        tofill = int(minlen - np.sum([len(y) for y in x])) # how much time span left
+        if tofill <= 0:
+            # len will now be longer
+            x.append(seqs[i])
+            seqs_out.append(np.concatenate(x))
+            x = []
+            continue
+            
+        dur = seqs[i].shape[0] # assuming time is on first axis
+        # if dur is less than what needs to be filled,
+        if dur <= tofill:
+            x.append(seqs[i])
+        else:
+            x.append(seqs[i][:tofill])
+    
+    return seqs_out
 
 
 def tempered_sampling(model, beta=3., timesteps=64, sample_obs=True, start_state_max=False, sample_var = 0):
@@ -278,7 +302,7 @@ class bird_dataset(object):
         
 
         
-def create_output(model, outpath, hidden_size, idx, hmm_opts, netG, sequence=[], nsamps=10):
+def create_output(model, outpath, hidden_size, idx, hmm_opts, netG, sequence=[]):
     """
         Creates hmm outputs via sampling, or simply reconstructions from the neural network.
         Outputs can be spectrograms and audio.
@@ -294,6 +318,7 @@ def create_output(model, outpath, hidden_size, idx, hmm_opts, netG, sequence=[],
                                                 variance, else uses sample_var (must be > 0.)
                                 - batchsize : int, how many observed vectors in a batch to
                                                 decode (LEAVE IT AT 1)
+                                - nsamps : 
                                 - nsamplesteps : int, how many timesteps to sample
                                 - sample_invtemperature : float, inverse temperature parameter
                                                 for sampling. Values > 1 lead to more "cold" sampling
@@ -303,6 +328,9 @@ def create_output(model, outpath, hidden_size, idx, hmm_opts, netG, sequence=[],
                                 - get_audio : bool, if True, generates the .wav file from a spectrogram
                                 - sample_rate : int, sampling rate for .wav file production
                                 
+            netG : pytorch generator neural network
+            sequence  : list of latent vector sequences (observations) to reconstruct. If empty (default),
+                        model is used to create sample sequences
     """
     if len(sequence)==0:
         # create samples
@@ -314,7 +342,7 @@ def create_output(model, outpath, hidden_size, idx, hmm_opts, netG, sequence=[],
         seqs = [tempered_sampling(model, beta = hmm_opts['sample_invtemperature'],
                                   timesteps=hmm_opts['nsamplesteps'], 
                                  sample_obs=True, start_state_max=True, 
-                                 sample_var = sample_variance) for _ in range(nsamps)]
+                                 sample_var = sample_variance) for _ in range(hmm_opts['nsamps'])]
         seqs = [s[0] for s in seqs]
     else:
         # seqs is a single numpy array of shape [timesteps x latent_dim]
@@ -327,7 +355,7 @@ def create_output(model, outpath, hidden_size, idx, hmm_opts, netG, sequence=[],
     for i in range(len(seqs)):
         spect_out[i] = decode_by_batch(seqs[i], netG,  batch_size = hmm_opts['batchsize'], \
                                  imageH=hmm_opts['imageH'], imageW=hmm_opts['imageW'], 
-                                 cuda = True, get_audio = hmm_opts['get_audio'])
+                                 cuda = hmm_opts['cuda'], get_audio = hmm_opts['get_audio'])
     audio_out = [a[1] for a in spect_out]
     spect_out = [s[0] for s in spect_out]
     # create output folder
@@ -363,7 +391,7 @@ def create_output(model, outpath, hidden_size, idx, hmm_opts, netG, sequence=[],
                                  hmm_opts['sample_rate'])
 
                 
-def load_netG(netG_file_path, ngpu = 1, nz = 16, ngf = 128, nc = 1, cuda = False):
+def load_netG(netG_file_path, nz = 16, ngf = 128, nc = 1, cuda = False):
     netG = _netG(nz, ngf, nc)
     netG.apply(weights_init)
     netG.load_state_dict(torch.load(netG_file_path))
@@ -374,7 +402,7 @@ def load_netG(netG_file_path, ngpu = 1, nz = 16, ngf = 128, nc = 1, cuda = False
     return netG
 
 
-def load_netE(netE_file_path, ngpu = 1, nz = 16, ngf = 128, nc = 1, cuda = False):
+def load_netE(netE_file_path, nz = 16, ngf = 128, nc = 1, cuda = False):
     netE = _netE(nz, ngf, nc)
     netE.apply(weights_init)
     netE.load_state_dict(torch.load(netE_file_path))

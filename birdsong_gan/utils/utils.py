@@ -217,7 +217,20 @@ def overlap_encode(sample, netE, transform_sample = False, imageW = 16, noverlap
 
 
 def overlap_decode(Z, netG, noverlap = 0, get_audio = False, cuda = True):
-    """Overlap decode. For a given numpy array
+    """Overlap decode. For a given numpy array Z of shape 
+        the output spectrogram (and optionally also audio) is created. 
+        Params
+        -------
+            Z : numpy.ndarray, (timesteps , latent_dim)
+            netG : generator neural network
+            noverlap  : how much overlap (in spectrogram frames) between 
+                        consecutive spectrogram chunks
+            get_audio : bool, to generate audio using Griffin Lim
+            cuda : bool, if True pushes computation on gpu
+        Returns
+        -------
+            X : numpy.ndarray, (nfft bins , chunks)
+            X_audio : numpy array, reconstructed audio
     """
     X = []
     X_audio = []
@@ -239,6 +252,9 @@ def overlap_decode(Z, netG, noverlap = 0, get_audio = False, cuda = True):
                 xa = inverse_transform(x, N=500)
                 X_audio.append(xa)
     X = np.concatenate(X, axis=1)
+    if get_audio:
+        X_audio = np.concatenate(X_audio, axis=1)
+        X_audio = lc.istft(X_audio)*2
     return X, X_audio
     
     
