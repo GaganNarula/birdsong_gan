@@ -15,19 +15,19 @@ We use the generator in combination  with Hidden Markov Models for sequence lear
 
 # Generating birdsong spectrogram snippets
 Here is a simple scheme showing what the generator does. A 32-dimensional latent vector (sampled from standard normal distribution) is fed into an upsampling convolutional network.
-![generator](https://github.com/GaganNarula/BirdsongGAN_sequencelearning/blob/master/images/Generative%20models%20of%20sequence%20learning%20in%20birdsong.002.jpeg)
+![generator](https://github.com/GaganNarula/birdsong_gan/blob/25b23036cff6d06526b36442bda14271233e4037/birdsong_gan/images/Generative%20models%20of%20sequence%20learning%20in%20birdsong.002.jpeg)
 
 # Learning sequences of encoded spectrogram snippets
 We use a simultaneously trained encoder to encode real birdsong into the generators latent space. The combined generator + encoder + discriminator network trio is trained with a custom loss function that contains the original GAN loss (i.e. generator and encoder trained to fool the discriminator) as well as a minimization of reconstruction error. We follow the procedure outlined in the paper Mode Regularized GAN's ([Chen et al 2016](https://arxiv.org/abs/1612.02136))
-![network](https://github.com/GaganNarula/BirdsongGAN_sequencelearning/blob/master/images/Generative%20models%20of%20sequence%20learning%20in%20birdsong.003.jpeg)
+![network](https://github.com/GaganNarula/birdsong_gan/blob/25b23036cff6d06526b36442bda14271233e4037/birdsong_gan/images/Generative%20models%20of%20sequence%20learning%20in%20birdsong.003.jpeg)
 
 To learn a model of encoded sequences, we use Hidden Markov Models. Thus, the encoded latent z-vectors are treated as observed variables generated a higher level latent state $h$. 
-![hmm](https://github.com/GaganNarula/BirdsongGAN_sequencelearning/blob/master/images/Generative%20models%20of%20sequence%20learning%20in%20birdsong.005.jpeg)
+![hmm](https://github.com/GaganNarula/birdsong_gan/blob/25b23036cff6d06526b36442bda14271233e4037/birdsong_gan/images/Generative%20models%20of%20sequence%20learning%20in%20birdsong.005.jpeg)
 
 # Reconstructions
 The generator-encoder pair (autoencoder) does a good job reconstructing real spectrograms, much better than PCA. However, it is more difficult to model the very early noisy babblings of the young zebra finch. The older the bird gets, the easier it becomes to generate (or reconstruct) good quality spectrograms.
-![example](https://github.com/GaganNarula/BirdsongGAN_sequencelearning/blob/master/images/Generative%20models%20of%20sequence%20learning%20in%20birdsong.004.jpeg)
+![example](https://github.com/GaganNarula/birdsong_gan/blob/25b23036cff6d06526b36442bda14271233e4037/birdsong_gan/images/Generative%20models%20of%20sequence%20learning%20in%20birdsong.004.jpeg)
 
 # HMM-GAN samples
 After learning hidden markov models separately for each day of learning, the system produces very realistic sequences of spectrograms! :-)
-![sample](https://github.com/GaganNarula/BirdsongGAN_sequencelearning/blob/master/images/Generative%20models%20of%20sequence%20learning%20in%20birdsong.006.jpeg)
+![sample](https://github.com/GaganNarula/birdsong_gan/blob/25b23036cff6d06526b36442bda14271233e4037/birdsong_gan/images/Generative%20models%20of%20sequence%20learning%20in%20birdsong.006.jpeg)
