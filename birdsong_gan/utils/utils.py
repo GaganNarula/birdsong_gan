@@ -192,6 +192,8 @@ def overlap_encode(sample, netE, transform_sample = False, imageW = 16, noverlap
     Z = []
     notdone = True
     idx = 0
+    if transform_sample:
+        sample = transform(sample)
     with torch.no_grad():
         while notdone:
             if idx + imageW > sample.shape[-1]:
@@ -199,8 +201,6 @@ def overlap_encode(sample, netE, transform_sample = False, imageW = 16, noverlap
                 continue
             # take out a slice 
             x = sample[:,idx : idx + imageW]
-            if transform_sample:
-                x = transform(x)
             # to tensor
             x = torch.from_numpy(x).float()
             # encode

@@ -11,6 +11,7 @@ import numpy as np
 from datetime import datetime
 from data.dataset import *
 from utils.utils import *
+from reconstruction_error.pca import learn_pca_model
 import pdb
 import joblib
 
@@ -24,9 +25,9 @@ opts_dict = {'input_path': EXT_PATH,
         'imageH': 129, 'imageW': 16, 'noverlap':0, 'nz': 16,'nc': 1, 'ngf': 256, 'ndf': 128,'niter': 50,
        'lr': 1e-5, 'lambdaa': 150, 'zreg_weight': 1, 'schedule_lr':False, 'd_noise': 0.1,
        'beta1': 0.5, 'cuda': True, 'ngpu': 1, 'nreslayers': 3,
-       'netG': '','netE': '','netD1': '','netD2': '','netD3': '','log_every': 300,
+       'netGpath': '','netEpath': '','netD1path':'','netD2path':'','log_every': 300,
        'sample_rate': 16000.,'noise_dist': 'normal','z_var': 1.,'nfft': 256, 'get_audio': False,
-        'manualSeed': []}
+        'manualSeed': [], 'do_pca': True, 'npca_samples': 1e6, 'npca_components': 256}
 
 
 
@@ -53,8 +54,13 @@ parser.add_argument('--manualSeed', type=int, default=-1, help='random number ge
 parser.add_argument('--schedule_lr', action = 'store_true', help='change learning rate')
 parser.add_argument('--log_every', type=int, default=300, help='make images and print loss every X batches')
 parser.add_argument('--get_audio', action='store_true', help='write wav file from spectrogram')
+parser.add_argument('--do_pca', action = 'store_true', help='to learn a PCA model of spectrogram chunks')
+parser.add_argument('--npca_components', type = int, default = 256, help = 'how many PCA components ?')
 parser.add_argument('--cuda', action='store_true', help='use gpu')
-
+parser.add_argument('--netEpath',type = str, default = '')
+parser.add_argument('--netGpath',type = str, default = '')
+parser.add_argument('--netD1path',type = str, default = '')
+parser.add_argument('--netD2path',type = str, default = '')
 
 
 
@@ -174,22 +180,22 @@ if __name__ == '__main__':
     # custom weights initialization called on networks
     netG = _netG(nz, ngf, nc)
     netG.apply(weights_init)
-    if opts_dict['netG'] != '':
+    if opts_dict['netGpath'] != '':
         netG.load_state_dict(torch.load(opts_dict['netG']))
     
     netD1 = _netD(ndf,nc)
     netD1.apply(weights_init)
-    if opts_dict['netD1'] != '':
+    if opts_dict['netD1path'] != '':
         netD1.load_state_dict(torch.load(opts_dict['netD1']))
 
     netD2 = _netD(ndf,nc)
     netD2.apply(weights_init)
-    if opts_dict['netD2'] != '':
+    if opts_dict['netD2path'] != '':
         netD2.load_state_dict(torch.load(opts_dict['netD2']))
         
     netE = _netE(nz, ngf, nc)
     netE.apply(weights_init)
-    if opts_dict['netE'] != '':
+    if opts_dict['netEpath'] != '':
         netE.load_state_dict(torch.load(opts_dict['netE']))
     
     if opts_dict['cuda']:
@@ -249,6 +255,11 @@ if __name__ == '__main__':
     per_epoch_std_loss_recon = np.zeros(opts_dict['niter'])
     per_epoch_std_loss_gan = np.zeros(opts_dict['niter'])
     
+    # PCA learning
+    if opts_dict['do_pca']:
+        Xpca = [] # will store some chunks
+        pca_model = None
+        
     # training loop
     for epoch in range(opts_dict['niter']):
         for i, (data, age) in enumerate(train_dataloader):
@@ -325,8 +336,13 @@ if __name__ == '__main__':
             err_g_d2 = criterion_gan(pred_fake_d2, labell)
             err_g_d2.backward()
             optimizerG.step()
-
-
+            
+            if opts_dict['do_pca']:
+                if len(Xpca) < opts_dict['npca_samples']:
+                    data = data.detach().cpu().numpy().squeeze()
+                    for d in data:
+                        Xpca.append(d)
+                
             # SAVE LOSSES
             minibatchLossD1.append(err_d1.item())
             minibatchLossD2.append(err_d2.item())
@@ -430,10 +446,21 @@ if __name__ == '__main__':
         
         # evaluate test error 
         print('\n .... evaluating test loss .... ')
-        #netG.eval()
-        #netE.eval()
+        
+        
+        # learn a PCA model 
+        if opts_dict['do_pca']:
+            if len(Xpca) >= opts_dict['npca_samples'] and pca_model is None:
+                print('///// learning PCA model /////')
+                pca_model = learn_pca_model(Xpca, opts_dict['npca_components'], 
+                                            random_state = opts_dict['manualSeed'])
+                print('///// PCA model learned, %d components /////'%(pca_model.n_components_))
+                joblib.dump({'pca_model':pca_model}, os.path.join(opts_dict['outf'],'pca_model.pkl'))
+        
+        # test set error 
         test_loss_recon = []
         test_loss_gan = []
+        
         with torch.no_grad():
             for k,(data,age) in enumerate(test_dataloader):
                 data = data.view(data.size(0),nc,data.size(1),data.size(2)).to(device)

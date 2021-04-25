@@ -82,6 +82,12 @@ def random_crop(im,width=16):
     return im[:,ind:ind+width]
 
 
+def random_crop_get_two(im, width = 16):
+    """Crops a spectrogram at a random slice and gets two consecutive chunks 
+    """
+    return
+
+
 def random_crop_transform_contiguous(im, width=16, bsize=64):
     ceil = im.shape[1] - width*bsize
     if ceil <= 0:
