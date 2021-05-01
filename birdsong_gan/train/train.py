@@ -1,5 +1,4 @@
-import sys
-sys.path.append(r'/home/gagan/code/birdsong_gan/birdsong_gan')
+from configs.cfg import *
 import argparse
 import random
 import torch
@@ -16,7 +15,7 @@ import pdb
 import joblib
 import gc
 
-from configs.cfg import EXT_PATH, SAVE_PATH
+
 
 
 opts_dict = {'input_path': EXT_PATH,
