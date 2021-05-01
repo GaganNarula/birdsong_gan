@@ -30,6 +30,7 @@ hmm_opts = {'hidden_state_size' : [5, 10, 15, 20, 30, 50, 75, 100],
             'netEpath' : '',
             'netGpath' : '',
             'outpath' : '',
+            'resnet' : False,
             'save_output' : True,
             'get_audio': False
            }

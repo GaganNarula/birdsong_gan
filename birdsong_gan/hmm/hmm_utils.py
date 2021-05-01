@@ -4,8 +4,7 @@ from hmmlearn.hmm import GaussianHMM, MultinomialHMM
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from utils.utils import encode, decode_by_batch, transform, inverse_transform, save_audio_sample, rescale_spectrogram, overlap_encode, overlap_decode
-from models.nets_16col_layernorm import _netG, _netE, weights_init
+from utils.utils import transform, inverse_transform, save_audio_sample, rescale_spectrogram, overlap_encode, overlap_decode
 import argparse
 import joblib
 from joblib import Parallel, delayed
@@ -353,9 +352,8 @@ def create_output(model, outpath, hidden_size, idx, hmm_opts, netG, sequence=[])
     # create spectrogram
     spect_out = [None for _ in range(len(seqs))]
     for i in range(len(seqs)):
-        spect_out[i] = decode_by_batch(seqs[i], netG,  batch_size = hmm_opts['batchsize'], \
-                                 imageH=hmm_opts['imageH'], imageW=hmm_opts['imageW'], 
-                                 cuda = hmm_opts['cuda'], get_audio = hmm_opts['get_audio'])
+        spect_out[i] = overlap_decode(seqs[i], netG,  noverlap = hmm_opts['noverlap'],
+                                          cuda = hmm_opts['cuda'], get_audio = hmm_opts['get_audio'])
     audio_out = [a[1] for a in spect_out]
     spect_out = [s[0] for s in spect_out]
     # create output folder
@@ -391,22 +389,34 @@ def create_output(model, outpath, hidden_size, idx, hmm_opts, netG, sequence=[])
                                  hmm_opts['sample_rate'])
 
                 
-def load_netG(netG_file_path, nz = 16, ngf = 128, nc = 1, cuda = False):
+                
+def load_netG(netG_file_path, nz = 16, ngf = 128, nc = 1, cuda = False, resnet = False):
+    """Load the generator network
+    """
+    if resnet:
+        from models.nets_16col_residual import _netG
+    else:
+        from models.nets_16col_layernorm import _netG
+        
     netG = _netG(nz, ngf, nc)
-    netG.apply(weights_init)
     netG.load_state_dict(torch.load(netG_file_path))
 
     if cuda:
-        netG.cuda()
-    netG.mode(reconstruction=True)
+        netG = netG.cuda()
     return netG
 
 
-def load_netE(netE_file_path, nz = 16, ngf = 128, nc = 1, cuda = False):
+def load_netE(netE_file_path, nz = 16, ngf = 128, nc = 1, cuda = False, resnet = False):
+    """Load the encoder network
+    """
+    if resnet:
+        from models.nets_16col_residual import _netE
+    else:
+        from models.nets_16col_layernorm import _netE
+        
     netE = _netE(nz, ngf, nc)
-    netE.apply(weights_init)
     netE.load_state_dict(torch.load(netE_file_path))
 
     if cuda:
-        netE.cuda()
+        netE = netE.cuda()
     return netE

@@ -16,10 +16,10 @@ class HMM(object):
         self.dataset = bird_dataset(datapath)
         self.netE = load_netE(netEpath, nz = hmm_opts['nz'], 
                               ngf = hmm_opts['ngf'], nc = hmm_opts['nc'], 
-                              cuda = hmm_opts['cuda'])
+                              cuda = hmm_opts['cuda'], resnet = hmm_opts['resnet'])
         self.netG = load_netG(netGpath, nz = hmm_opts['nz'], 
                               ngf = hmm_opts['ngf'], nc = hmm_opts['nc'], 
-                              cuda = hmm_opts['cuda'])
+                              cuda = hmm_opts['cuda'], resnet = hmm_opts['resnet'])
         self.P = hmm_opts
         self.verbose = verbose
         self.save_output = save_output
@@ -53,11 +53,14 @@ class HMM(object):
         return model.score(np.concatenate(data), lengths)
     
     def generate_spectrogram_samples(self, model):
+        """Call this to generate spectrograms from the learned HMM
+        """
         # create samples
         # if the variance of hmm is learned, by default use that to sample
         if 'c' in self.P['fit_params']:
             sample_variance = 0
         else:
+            # if covariance was not learned, use given sample variance
             sample_variance = self.P['sample_var']
         seqs = [tempered_sampling(model, beta = self.P['sample_invtemperature'],
                                   timesteps=self.P['nsamplesteps'], 
@@ -69,12 +72,12 @@ class HMM(object):
         for i in range(len(seqs)):
             spect_out[i] = overlap_decode(seqs[i], self.netG,  noverlap = self.P['noverlap'],
                                           cuda = self.P['cuda'], get_audio = self.P['get_audio'])
-        spect_out = [s[0] for s in spect_out]
+        spects = [s[0] for s in spect_out]
         if self.P['get_audio']:
             audio_out = [a[1] for a in spect_out]
         else:
             audio_out = None
-        return spect_out, audio_out
+        return spects, audio_out
         
     def fit_single_day(self, day_idx, hidden_size, lastmodel = None):
         

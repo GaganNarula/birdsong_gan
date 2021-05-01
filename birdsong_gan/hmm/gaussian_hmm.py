@@ -14,8 +14,8 @@ class GaussHMM(object):
                  estimate_type = 'ML', do_kmeans = False,
                  n_iters = 100, tolerance = 1e-5, 
                 verbose = True):
-        self.D = D
-        self.nstates = K
+        self.D = D # num feature dims
+        self.nstates = K # num components
         self.n_iters = n_iters
         self.do_kmeans = do_kmeans
         self.learn_params = learn_params
@@ -31,20 +31,40 @@ class GaussHMM(object):
             
         self.prior_mean = mean_prior*np.ones(D)
         self.covar_prior = covar_prior_weight*np.eye(D)
-        # intialize randomly
-        self.transmat = np.random.dirichlet(self.transmat_prior_conc, size = K)
-        self.startprob = np.random.dirichlet(self.startprob_prior_conc)
-        self.means = multivariate_normal.rvs(size = K, mean = self.prior_mean, cov= np.eye(D))
-        self.covs = invwishart.rvs(D+2, self.covar_prior, size = K)
+        # initialize parameters
+        self._init_params()
+    
+    def _validate_input(self, seqs):
+        """seqs is a list of numpy arrays
+        """
+        assert len(seqs) > 0, 'Empty input array list!'
+        assert seqs[0].ndim == 2, 'Need input arrays to be 2 dimensional'
+        assert seqs[0].shape[-1] == self.D, 'Mismatch between number of feature dimensions in input and D'
         
-    def init_gmm_means_and_covs(self, x, K, covtype = 'diag'):
+    def _init_params(self):
+        # intialize randomly
+        self.transmat = np.random.dirichlet(self.transmat_prior_conc, size = self.nstates)
+        self.startprob = np.random.dirichlet(self.startprob_prior_conc)
+        self.means = multivariate_normal.rvs(size = self.nstates, 
+                                             mean = self.prior_mean, cov= np.eye(self.D))
+        self.covs = invwishart.rvs(self.D + 2, self.covar_prior, size = self.nstates)
+        
+    def _init_gmm_means_and_covs(self, x, K, covtype = 'diag'):
         from sklearn.mixture import GaussianMixture
         gmm = GaussianMixture(n_components = K, covariance_type = covtype, 
                              random_state = 0, reg_covar = 1e-4)
         gmm.fit(x)
-        return gmm.means_, gmm.covariances_
+        if covtype == 'spherical':
+            # shape (n_components,)
+            covs = np.stack([c*np.eye(self.D) for c in gmm.covariances_])
+        elif covtype == 'diag':
+            # shape (n_components, D)
+            covs = np.stack([np.diag(c) for c in gmm.covariances_])
+        elif covtype == 'full':
+            covs = gmm.covariances_
+        return gmm.means_, covs
             
-    def init_stats(self):
+    def _init_stats(self):
         stats = {}
         # collect the statistics for parameter updates
         stats['A'] = np.zeros((self.nstates,self.nstates))
@@ -177,16 +197,13 @@ class GaussHMM(object):
         # update start probability vector
         if 's' in self.learn_params:
             num = stats['pi'] + self.startprob_prior_conc - 1
-            normalizer = (num.sum() + np.sum(self.startprob_prior_conc) - self.nstates)
-            normalizer = num / normalizer
             # sum over states
-            self.startprob /= np.sum(self.startprob)
+            self.startprob = num / num.sum()
         # update transition matrix, means and covs
         for k in range(self.nstates):
             if 't' in self.learn_params:
                 num = stats['A'][k,:] + self.transmat_prior_conc[k] - 1
-                normalizer = (num.sum() + np.sum(self.transmat_prior_conc) - self.nstates)
-                self.transmat[k,:] = num / normalizer
+                self.transmat[k,:] = num / num.sum()
             # for mean
             if 'm' in self.learn_params:
                 self.means[k] = (stats['mu'][k] + self.prior_mean)/(stats['gammad'][k] + 1)
@@ -206,12 +223,16 @@ class GaussHMM(object):
     def fit(self, seqs, log_every = 10):
         """ Fit params to several i.i.d sequences
         """ 
+        self._validate_input(seqs)
+        
         if self.do_kmeans:
-            self. init_gmm_means_and_covs(np.concatenate(seqs, axis=0), 'full')
+            S = np.concatenate(seqs,axis=0)
+            self._init_gmm_means_and_covs(S, self.nstates, 'full')
+            
         Lens = [y.shape[0] for y in seqs]
         LLprev = 0.
         for n in range(self.n_iters):
-            stats = self.init_stats()
+            stats = self._init_stats()
             LL = 0. # log likelihood over all sequences
             for i, y in enumerate(seqs):
                 # sigma is [T,nstates,nstates] matrix
