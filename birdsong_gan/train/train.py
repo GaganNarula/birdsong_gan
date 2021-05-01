@@ -14,6 +14,7 @@ from utils.utils import *
 from reconstruction_error.pca import learn_pca_model
 import pdb
 import joblib
+import gc
 
 from configs.cfg import EXT_PATH, SAVE_PATH
 
@@ -455,6 +456,8 @@ if __name__ == '__main__':
                 pca_model = learn_pca_model(Xpca, opts_dict['npca_components'], 
                                             random_state = opts_dict['manualSeed'])
                 print('///// PCA model learned, %d components /////'%(pca_model.n_components_))
+                del Xpca
+                gc.collect()
                 joblib.dump({'pca_model':pca_model}, os.path.join(opts_dict['outf'],'pca_model.pkl'))
         
         # test set error 
