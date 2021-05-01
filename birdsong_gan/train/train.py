@@ -20,11 +20,11 @@ from configs.cfg import EXT_PATH, SAVE_PATH
 
 opts_dict = {'input_path': EXT_PATH,
        'outf': SAVE_PATH,
-        'age_weights_path': '',
+        'age_weights_path': '', 
        'distance_fun': 'L1', 'subset_age_weights' : [0., 1.], 'workers': 6, 'batchSize': 128, 
         'imageH': 129, 'imageW': 16, 'noverlap':0, 'nz': 16,'nc': 1, 'ngf': 256, 'ndf': 128,'niter': 50,
        'lr': 1e-5, 'lambdaa': 150, 'zreg_weight': 1, 'schedule_lr':False, 'd_noise': 0.1,
-       'beta1': 0.5, 'cuda': True, 'ngpu': 1, 'nreslayers': 3,
+       'beta1': 0.5, 'cuda': True, 'ngpu': 1, 'nreslayers': 3, 'z_reg':False, 'mds_loss':False,
        'netGpath': '','netEpath': '','netD1path':'','netD2path':'','log_every': 300,
        'sample_rate': 16000.,'noise_dist': 'normal','z_var': 1.,'nfft': 256, 'get_audio': False,
         'manualSeed': [], 'do_pca': True, 'npca_samples': 1e6, 'npca_components': 256}
@@ -47,6 +47,7 @@ parser.add_argument('--ngf', type=int, default=256)
 parser.add_argument('--ndf', type=int, default=256)
 parser.add_argument('--niter', type=int, default=50, help='number of epochs to train for')
 parser.add_argument('--lr', type=float, default = 0.00001, help='learning rate')
+parser.add_argument('--mds_loss',action='store_true', help='multidimensional scaling type loss')
 parser.add_argument('--z_reg', action="store_true", help='whether to regularize the posterior')
 parser.add_argument('--zreg_weight', type = float, default =  1, help = 'weight for z regularization')
 parser.add_argument('--z_var', type = float, default = 1., help = 'variance of latent prior')
@@ -91,7 +92,32 @@ def noise_t():
         return out.cuda()
     else:
         return out
-        
+    
+    
+def pairwise_distances(x,y):
+    ''' x and y are (N x d) tensor '''
+    N = x.size(0)
+    dists = []
+    for i in range(N):
+        for j in range(i+1,N):
+            d = (torch.sum((x[i] - x[j])**2))**0.5
+            dists.append(d.view(1))
+    return torch.cat(dists,dim=0)
+            
+
+def MDSLoss(encoding, data):
+    # you have to flatten data
+    dataflat = data.view(-1,data.size(2)*data.size(3))
+    # make pairwise distances in input
+    inputdists = pairwise_distances(dataflat, dataflat)
+    # flatten encoding
+    encodeflat = encoding.view(-1, encoding.size(1))
+    encodeddists = pairwise_distances(encodeflat, encodeflat)
+    # loss
+    L = torch.mean((encodeddists - inputdists)**2)
+    return L
+
+
         
 # some cuda / cudnn settings for memory issues
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -322,6 +348,16 @@ if __name__ == '__main__':
             err_d2.backward()
             optimizerD2.step()
             
+            # MDS loss for encoder only
+            if args.mds_loss:
+                netE.zero_grad()
+                encoding = netE(data)
+                mdsloss = MDSLoss(encoding, data)
+                mdsloss.backward()
+                optimizerE.step()
+                minibatchLossE.append(mdsloss.item())
+                netE.zero_grad()
+
             #------ extra regularization for z------#
             if args.z_reg:
                 err_E = opts_dict['zreg_weight'] * criterion_dist(netE(fake), noise.squeeze())
