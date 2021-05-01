@@ -93,25 +93,36 @@ def normalize_spectrogram(image,threshold):
     return image
 
 
-def load_netG(netG_file_path, ngpu = 1, nz = 16, ngf = 128, nc = 1, cuda = False):
+                
+def load_netG(netG_file_path, nz = 16, ngf = 128, nc = 1, cuda = False, resnet = False):
+    """Load the generator network
+    """
+    if resnet:
+        from models.nets_16col_residual import _netG
+    else:
+        from models.nets_16col_layernorm import _netG
     netG = _netG(nz, ngf, nc)
-    netG.apply(weights_init)
     netG.load_state_dict(torch.load(netG_file_path))
 
     if cuda:
-        netG.cuda()
-    netG.mode(reconstruction=True)
+        netG = netG.cuda()
     return netG
 
 
-def load_netE(netE_file_path, ngpu = 1, nz = 16, ngf = 128, nc = 1, cuda = False):
+def load_netE(netE_file_path, nz = 16, ngf = 128, nc = 1, cuda = False, resnet = False):
+    """Load the encoder network
+    """
+    if resnet:
+        from models.nets_16col_residual import _netE
+    else:
+        from models.nets_16col_layernorm import _netE
     netE = _netE(nz, ngf, nc)
-    netE.apply(weights_init)
     netE.load_state_dict(torch.load(netE_file_path))
 
     if cuda:
-        netE.cuda()
+        netE = netE.cuda()
     return netE
+
 
 
 def decode_by_batch(zhat, netG,  batch_size = 64, imageH=129, imageW=16, 
