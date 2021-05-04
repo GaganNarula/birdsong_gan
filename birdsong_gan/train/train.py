@@ -276,10 +276,12 @@ if __name__ == '__main__':
     
     # label noise for discriminator
     # probability that a label is wrongly labelled
-    d_prob = torch.FloatTensor([1.-opts_dict['d_noise']]).to(device)
+    d_prob = torch.FloatTensor([1. - opts_dict['d_noise']]).to(device)
     # useful to flip labels randomly
     def true_wp(prob, size, device):
+        # generate a uniform random number
         p = torch.rand(size).to(device).float()
+        # if prob = 0.9, most of the time, this will be True
         p = (p < prob).float()
         return p 
     
@@ -307,10 +309,14 @@ if __name__ == '__main__':
             pred_rec_d1 = netD1(reconstruction.detach())
             # map X -> class (maximize D)
             pred_real_d1 = netD1(data)
+            
             # For discriminator, the Pr(class=1|X) = 0.9, true_wp = label with that probability
             err_real_d1 = criterion_gan(pred_real_d1, true_wp(d_prob,pred_real_d1.size(),device))
             # For disc, probability this is a reconstruction, the Pr(class=1| Xhat) = 0.1 = d_noise
-            err_fake_d1 = criterion_gan(pred_rec_d1, true_wp(1.-d_prob,pred_real_d1.size(),device))
+            try:
+                err_fake_d1 = criterion_gan(pred_rec_d1, true_wp(1.-d_prob,pred_real_d1.size(),device))
+            except:
+                pdb.set_trace()
             err_d1 = err_real_d1 + err_fake_d1
             err_d1.backward()
             # minimize  -logD(X) and maximize -log(D(Xhat)) only w.r.t Discriminator params!

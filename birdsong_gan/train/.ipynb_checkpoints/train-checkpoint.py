@@ -1,5 +1,7 @@
 import sys
-sys.path.append(r'/home/gagan/code/birdsong_gan/birdsong_gan')
+import os
+sys.path.append(os.path.split(os.getcwd())[0])
+from configs.cfg import *
 import argparse
 import random
 import torch
@@ -14,17 +16,18 @@ from utils.utils import *
 from reconstruction_error.pca import learn_pca_model
 import pdb
 import joblib
+import gc
 
-from configs.cfg import EXT_PATH, SAVE_PATH
+
 
 
 opts_dict = {'input_path': EXT_PATH,
        'outf': SAVE_PATH,
-        'age_weights_path': '',
+        'age_weights_path': '', 
        'distance_fun': 'L1', 'subset_age_weights' : [0., 1.], 'workers': 6, 'batchSize': 128, 
         'imageH': 129, 'imageW': 16, 'noverlap':0, 'nz': 16,'nc': 1, 'ngf': 256, 'ndf': 128,'niter': 50,
        'lr': 1e-5, 'lambdaa': 150, 'zreg_weight': 1, 'schedule_lr':False, 'd_noise': 0.1,
-       'beta1': 0.5, 'cuda': True, 'ngpu': 1, 'nreslayers': 3,
+       'beta1': 0.5, 'cuda': True, 'ngpu': 1, 'nreslayers': 3, 'z_reg':False, 'mds_loss':False,
        'netGpath': '','netEpath': '','netD1path':'','netD2path':'','log_every': 300,
        'sample_rate': 16000.,'noise_dist': 'normal','z_var': 1.,'nfft': 256, 'get_audio': False,
         'manualSeed': [], 'do_pca': True, 'npca_samples': 1e6, 'npca_components': 256}
@@ -47,6 +50,7 @@ parser.add_argument('--ngf', type=int, default=256)
 parser.add_argument('--ndf', type=int, default=256)
 parser.add_argument('--niter', type=int, default=50, help='number of epochs to train for')
 parser.add_argument('--lr', type=float, default = 0.00001, help='learning rate')
+parser.add_argument('--mds_loss',action='store_true', help='multidimensional scaling type loss')
 parser.add_argument('--z_reg', action="store_true", help='whether to regularize the posterior')
 parser.add_argument('--zreg_weight', type = float, default =  1, help = 'weight for z regularization')
 parser.add_argument('--z_var', type = float, default = 1., help = 'variance of latent prior')
@@ -91,13 +95,38 @@ def noise_t():
         return out.cuda()
     else:
         return out
+    
+    
+def pairwise_distances(x,y):
+    ''' x and y are (N x d) tensor '''
+    N = x.size(0)
+    dists = []
+    for i in range(N):
+        for j in range(i+1,N):
+            d = (torch.sum((x[i] - x[j])**2))**0.5
+            dists.append(d.view(1))
+    return torch.cat(dists,dim=0)
+            
+
+def MDSLoss(encoding, data):
+    # you have to flatten data
+    dataflat = data.view(-1,data.size(2)*data.size(3))
+    # make pairwise distances in input
+    inputdists = pairwise_distances(dataflat, dataflat)
+    # flatten encoding
+    encodeflat = encoding.view(-1, encoding.size(1))
+    encodeddists = pairwise_distances(encodeflat, encodeflat)
+    # loss
+    L = torch.mean((encodeddists - inputdists)**2)
+    return L
+
+
         
-        
-# some cuda / cudnn settings for memory issues
-torch.backends.cuda.matmul.allow_tf32 = True
+# some cuda / cudnn settings for memory issues#
+#torch.backends.cuda.matmul.allow_tf32 = True
 cudnn.deterministic = True
 cudnn.benchmark = True
-cudnn.allow_tf32 = True
+#cudnn.allow_tf32 = True
 
 
 if __name__ == '__main__':
@@ -225,6 +254,9 @@ if __name__ == '__main__':
     optimizerD2 = optim.Adam(netD2.parameters(), lr = opts_dict['lr'], betas = (opts_dict['beta1'], 0.999))
     optimizerG = optim.Adam(itertools.chain(netG.parameters(),
                                             netE.parameters()), lr = opts_dict['lr'], betas = (opts_dict['beta1'], 0.999))
+    # for mds loss
+    if args.mds_loss:
+        optimizerE = optim.Adam(netE.parameters(), lr = opts_dict['lr'], betas = (opts_dict['beta1'], 0.999))
     
     # optional learning rate scheduler
     if opts_dict['schedule_lr']:
@@ -239,13 +271,17 @@ if __name__ == '__main__':
     minibatchLossG1_gan = []
     minibatchLossD2 = []
     minibatchLossG2 = []
+    # only for mds loss
+    minibatchLossE = []
     
     # label noise for discriminator
     # probability that a label is wrongly labelled
-    d_prob = torch.FloatTensor([1.-opts_dict['d_noise']]).to(device)
+    d_prob = torch.FloatTensor([1. - opts_dict['d_noise']]).to(device)
     # useful to flip labels randomly
     def true_wp(prob, size, device):
+        # generate a uniform random number
         p = torch.rand(size).to(device).float()
+        # if prob = 0.9, most of the time, this will be True
         p = (p < prob).float()
         return p 
     
@@ -273,10 +309,14 @@ if __name__ == '__main__':
             pred_rec_d1 = netD1(reconstruction.detach())
             # map X -> class (maximize D)
             pred_real_d1 = netD1(data)
+            
             # For discriminator, the Pr(class=1|X) = 0.9, true_wp = label with that probability
             err_real_d1 = criterion_gan(pred_real_d1, true_wp(d_prob,pred_real_d1.size(),device))
             # For disc, probability this is a reconstruction, the Pr(class=1| Xhat) = 0.1 = d_noise
-            err_fake_d1 = criterion_gan(pred_rec_d1, true_wp(1.-d_prob,pred_real_d1.size(),device))
+            try:
+                err_fake_d1 = criterion_gan(pred_rec_d1, true_wp(1.-d_prob,pred_real_d1.size(),device))
+            except:
+                pdb.set_trace()
             err_d1 = err_real_d1 + err_fake_d1
             err_d1.backward()
             # minimize  -logD(X) and maximize -log(D(Xhat)) only w.r.t Discriminator params!
@@ -307,12 +347,13 @@ if __name__ == '__main__':
             pred_rec_d2 = netD2(reconstruction.detach())
             err_real_d2 = criterion_gan(pred_rec_d2, true_wp(d_prob,pred_real_d1.size(),device))
             
-            if args.noise_dist == 't':
+            if opts_dict['noise_dist'] == 't':
                 noise = noise_t()
-            elif args.noise_dist == 'normal':
+            elif opts_dict['noise_dist'] == 'normal':
                 noise.normal_(0., opts_dict['z_var'])
             else:
                 noise.uniform_(-opts_dict['z_var'],opts_dict['z_var'])
+            
             
             netG.zero_grad()
             fake = netG(noise)
@@ -322,16 +363,29 @@ if __name__ == '__main__':
             err_d2.backward()
             optimizerD2.step()
             
+            # MDS loss for encoder only
+            if args.mds_loss:
+                netE.zero_grad()
+                encoding = netE(data)
+                mdsloss = MDSLoss(encoding, data)
+                mdsloss.backward()
+                optimizerE.step()
+                minibatchLossE.append(mdsloss.item())
+                netE.zero_grad()
+
             #------ extra regularization for z------#
             if args.z_reg:
+                netG.zero_grad()
+                netE.zero_grad()
+                fake = netG(noise)
                 err_E = opts_dict['zreg_weight'] * criterion_dist(netE(fake), noise.squeeze())
-                err_E.backward(retain_graph=True)
+                err_E.backward()
                 optimizerG.step()
                 
             netE.zero_grad()
             netG.zero_grad()
             netD2.zero_grad()
-            pred_fake_d2 = netD2(fake)
+            pred_fake_d2 = netD2(fake.detach())
             labell = torch.FloatTensor(opts_dict['batchSize'],1).fill_(1.).to(device) # true label
             err_g_d2 = criterion_gan(pred_fake_d2, labell)
             err_g_d2.backward()
@@ -353,13 +407,17 @@ if __name__ == '__main__':
 
             ### SHOW LOSS AFTER SOME BATCHES ####
             if (i % logpt == 0) & (i > 0):
-                print('[%d/%d][%d/%d] D1: %.2f (%.2f) D2: %.2f (%.2f) G1_gan: %.2f (%.2f) G1_rec: %.2f (%.2f) G2: %.2f (%.2f)'
+                if len(minibatchLossE)>0:
+                    minbE = np.mean(minibatchLossE[-logpt:])
+                else:
+                    minbE = -1.
+                print('[%d/%d][%d/%d] D1: %.2f D2: %.2f G1_gan: %.2f G1_rec: %.2f G2: %.2f MDS: %.2f'
                       % (epoch, opts_dict['niter'], i, len(train_dataloader),
-                        np.mean(minibatchLossD1[-logpt:]), np.std(minibatchLossD1[-logpt:]),
-                         np.mean(minibatchLossD2[-logpt:]), np.std(minibatchLossD2[-logpt:]),
-                         np.mean(minibatchLossG1_gan[-logpt:]), np.std(minibatchLossG1_gan[-logpt:]),
-                         np.mean(minibatchLossG1_rec[-logpt:]), np.std(minibatchLossG1_rec[-logpt:]),
-                         np.mean(minibatchLossG2[-logpt:]), np.std(minibatchLossG2[-logpt:])
+                        np.mean(minibatchLossD1[-logpt:]),
+                         np.mean(minibatchLossD2[-logpt:]),
+                         np.mean(minibatchLossG1_gan[-logpt:]),
+                         np.mean(minibatchLossG1_rec[-logpt:]),
+                         np.mean(minibatchLossG2[-logpt:]), minbE
                          )
                       )
                 
@@ -455,6 +513,8 @@ if __name__ == '__main__':
                 pca_model = learn_pca_model(Xpca, opts_dict['npca_components'], 
                                             random_state = opts_dict['manualSeed'])
                 print('///// PCA model learned, %d components /////'%(pca_model.n_components_))
+                del Xpca
+                gc.collect()
                 joblib.dump({'pca_model':pca_model}, os.path.join(opts_dict['outf'],'pca_model.pkl'))
         
         # test set error 
