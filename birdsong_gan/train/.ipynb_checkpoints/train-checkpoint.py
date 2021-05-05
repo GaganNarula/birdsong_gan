@@ -122,6 +122,7 @@ def MDSLoss(encoding, data):
 
 
         
+# some cuda / cudnn settings for memory issues
 # some cuda / cudnn settings for memory issues#
 #torch.backends.cuda.matmul.allow_tf32 = True
 cudnn.deterministic = True
