@@ -417,3 +417,4 @@ class DeepMarkovAE(nn.Module):
         1. Given a single spectrogram, encodes it to a sequence of latent vectors.
         2. Reconstructs single spectrogram
     """
+    pass

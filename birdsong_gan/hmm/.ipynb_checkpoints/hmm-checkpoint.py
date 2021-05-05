@@ -141,19 +141,19 @@ class HMM(object):
         if self.P.last_day == -1:
             last_day = Ndays
         else:
-            last_day = self.P.last_day
+            last_day = self.P['last_day']
         # train models
         print('\n ..... training HMMs ..... \n')
         results = [None for _ in range(Ndays)]
         # loop over days
-        for k in range(self.P.start_from, last_day+1):
+        for k in range(self.P['start_from'], last_day+1):
             # loop over hidden state sizes
             results[k] = [None for _ in range(len(K))]
             for j in range(len(K)):
                 start = time()
-                if not self.P.do_chaining:
+                if not self.P['do_chaining']:
                     # check if this model already exists
-                    outpath = os.path.join(self.P.outpath, 'day_'+str(k)+'_hiddensize_'+str(K[j]),
+                    outpath = os.path.join(self.P['outpath'], 'day_'+str(k)+'_hiddensize_'+str(K[j]),
                                            'model_data_and_scores_day_'+str(k)+'.pkl')
                     if not os.path.exists(outpath):
                         results[k][j] = self.fit_single_day(k, K[j], None)
@@ -171,7 +171,7 @@ class HMM(object):
                                                                                                           results[k][j][1] / results[k][j][6]))
                     print('..... avg number of active states %.2f, std dev %.2f .....'%(results[k][j][3], results[k][j][4]))
                     print('..... time taken %.1f secs ..... \n\n'%(end-start))
-            self.Z =[] # empty this day's cache
+            self.Z =[] # empty this day's cache of latent vectors
             
         print('\n ###### finished training! #######')
         return results
@@ -256,7 +256,7 @@ def learn_single_hmm_gauss_with_initialization(data, lastmodel = None, lengths =
         if init_params == 'kmeans':
             model = GaussianHMM(n_components=K, covariance_type=covtype, transmat_prior=transmat_prior, \
                        random_state=RNG, n_iter = n_iter, covars_prior=covars_prior,params=fit_params, 
-                        init_params = 'mc', verbose=True, tol=tol, min_covar = 1e-2)
+                        init_params = 'mc', verbose=False, tol=tol, min_covar = 1e-2)
             #intialize randomly
             model.transmat_ = np.random.dirichlet(transmat_prior * np.ones(K), size = K)
             model.startprob_ = np.random.dirichlet(transmat_prior * np.ones(K))
@@ -270,7 +270,7 @@ def learn_single_hmm_gauss_with_initialization(data, lastmodel = None, lengths =
         else:
             model = GaussianHMM(n_components=K, covariance_type=covtype, transmat_prior=transmat_prior, \
                        random_state=RNG, n_iter = n_iter, covars_prior=covars_prior,params=fit_params, 
-                        init_params = init_params, verbose=True, tol=tol)
+                        init_params = init_params, verbose=False, tol=tol)
         # for hmmlearn vesion 0.2.3
         #fake_init_data = np.random.multivariate_normal(mean=np.zeros(data.shape[1]),
         #                                               cov=covars_prior*np.eye(data.shape[1]), 
@@ -301,6 +301,7 @@ parser.add_argument('--do_chaining', action = 'store_true')
 parser.add_argument('--save_output', action = 'store_true', help ='boolean, turns ON output saving')
 parser.add_argument('--hidden_state_size', type = int, nargs = '+', default = [5, 10, 15, 20, 30, 50, 75, 100])
 parser.add_argument('--nz', type = int, default = 16, help = 'latent space dimensions')
+parser.add_argument('-ngf', type = int, default = 264, help = 'number of generator filters')
 parser.add_argument('--covariance_type', type = str, default = 'spherical')
 parser.add_argument('--covars_prior', type = float, default = 1., help ='diagnoal term weight on the prior covariance')
 parser.add_argument('--fit_params', type = str, default = 'stmc', help = 'which parameters to fit, s = startprob, t = transmat, m = means, c = covariances')
@@ -312,6 +313,11 @@ parser.add_argument('--start_from', type = int, default = 0, help = 'start day o
 parser.add_argument('--last_day', type = int, default = -1, help = 'last day of learning')
 parser.add_argument('--min_seq_multiplier', type = int ,default = 10, help='the number of files should be at least hidden size x this factor')
 parser.add_argument('--init_params', type = str, default = 'str', help='which variables to initialize, or initialize with kmeans, enter kmeans')
+parser.add_argument('--munge', action = 'store_true', help='whether to concate')
+parser.add_argument('--munge_len', type = int, default = 50, help = 'minimum length of a sequence to which sequences be concatenated')
+parser.add_argument('--res_net', action = 'store_true', help = 'whether a resnet is being loaded or not')
+
+
 
 if __name__ == '__main__':
     args = parser.parse_args()
