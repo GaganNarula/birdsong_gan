@@ -1,13 +1,55 @@
 from hmm_utils import *
-from hmm_opts import hmm_opts
 import pdb
 import gc
 import warnings
 warnings.filterwarnings("ignore")
 
 
+
+hmm_opts = {'hidden_state_size' : [5, 10, 15, 20, 30, 50, 75, 100],
+           'covariance_type' : 'spherical', 
+           'fit_params' : 'stmc',
+           'transmat_prior' : 1.,
+           'n_iter' : 300,
+           'tolerance' : 0.01,
+           'nz' : 16, 
+           'ngf' : 264,
+           'nc' : 1,
+            'covars_prior' : 1.,
+            'init_params' : 'stmc',
+            'imageH': 129,
+           'imageW': 16,
+            'noverlap' : 0,
+           'batchsize' : 2,
+            'train_proportion' : 0.7,
+           'nsamplesteps' : 128,
+           'nsamps': 10,
+           'sample_var': 0.,
+            'sample_invtemperature' : 1.,
+            'munge' : False,
+            'munge_len' : 50,
+            'n_restarts': 1,
+            'do_chaining': False,
+            'min_seq_multiplier': 10,
+            'cuda' : True,
+            'hmm_random_state' : 0,
+            'last_day': -1,
+            'start_from' : 0,
+            'datapath' : '',
+            'netEpath' : '',
+            'netGpath' : '',
+            'outpath' : '',
+            'resnet' : False,
+            'save_output' : True,
+            'get_audio': False
+           }
+
+
+
 # random state
 RNG = hmm_opts['hmm_random_state']
+
+
 
 
 class HMM(object):
@@ -291,7 +333,9 @@ def learn_single_hmm_gauss_with_initialization(data, lastmodel = None, lengths =
 
 
 
-    
+
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--datapath', type = str)
 parser.add_argument('--netGpath', type = str, help = 'path to generator neural network')
@@ -301,7 +345,7 @@ parser.add_argument('--do_chaining', action = 'store_true')
 parser.add_argument('--save_output', action = 'store_true', help ='boolean, turns ON output saving')
 parser.add_argument('--hidden_state_size', type = int, nargs = '+', default = [5, 10, 15, 20, 30, 50, 75, 100])
 parser.add_argument('--nz', type = int, default = 16, help = 'latent space dimensions')
-parser.add_argument('-ngf', type = int, default = 264, help = 'number of generator filters')
+parser.add_argument('--ngf', type = int, default = 264, help = 'number of generator filters')
 parser.add_argument('--covariance_type', type = str, default = 'spherical')
 parser.add_argument('--covars_prior', type = float, default = 1., help ='diagnoal term weight on the prior covariance')
 parser.add_argument('--fit_params', type = str, default = 'stmc', help = 'which parameters to fit, s = startprob, t = transmat, m = means, c = covariances')
@@ -315,8 +359,8 @@ parser.add_argument('--min_seq_multiplier', type = int ,default = 10, help='the 
 parser.add_argument('--init_params', type = str, default = 'str', help='which variables to initialize, or initialize with kmeans, enter kmeans')
 parser.add_argument('--munge', action = 'store_true', help='whether to concate')
 parser.add_argument('--munge_len', type = int, default = 50, help = 'minimum length of a sequence to which sequences be concatenated')
-parser.add_argument('--res_net', action = 'store_true', help = 'whether a resnet is being loaded or not')
-
+parser.add_argument('--resnet', action = 'store_true', help = 'whether a resnet is being loaded or not')
+parser.add_argument('--cuda', action = 'store_true', help='whether to run on gpu')
 
 
 if __name__ == '__main__':
@@ -325,6 +369,6 @@ if __name__ == '__main__':
     for k,v in op.items():
         if k in hmm_opts.keys():
             hmm_opts[k] = v
-            
+    pdb.set_trace()
     hmm_ = HMM(args.datapath, args.netGpath, args.netEpath, hmm_opts, verbose = True, save_output=args.save_output)
     results = hmm_.fit_all_days()

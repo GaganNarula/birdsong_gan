@@ -1,5 +1,6 @@
 import sys
-sys.path.append(r'/home/gagan/code/birdsong_gan/birdsong_gan')
+import os
+sys.path.append(os.path.split(os.getcwd())[0])
 from hmmlearn.hmm import GaussianHMM, MultinomialHMM
 import torch
 import numpy as np
