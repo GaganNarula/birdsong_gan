@@ -72,15 +72,16 @@ class HMM(object):
         # get the latent space data
         X = self.dataset.get(day = day_idx)
         if len(X) < hidden_size*self.P['min_seq_multiplier'] or len(X) < self.abs_min_files:
-            print('\n ### LESS THAN MIN FILES ON DAY %d, SKIPPING! ###\n'%(idx))
-            return None
+            print('\n ### LESS THAN MIN FILES ON DAY %d, SKIPPING! ###\n'%(day_idx))
+            return False
         # encode all spectrograms from that day
         self.Z = [overlap_encode(x, self.netE, transform_sample = False, imageW = self.P['imageW'], 
                                  noverlap = self.P['noverlap'], cuda = self.P['cuda']) for x in X]
         # munge sequences
         if self.P['munge']:
             self.Z = munge_sequences(self.Z, self.P['munge_len'])
-            
+        return True
+    
     def create_training_and_test(self):
         # split into train and validation
         ids = np.random.permutation(len(self.Z))
@@ -125,7 +126,10 @@ class HMM(object):
         
         # encode spectrograms
         if len(self.Z) == 0:
-            self.encode_spectrograms(day_idx, hidden_size)
+            encoded_z = self.encode_spectrograms(day_idx, hidden_size)
+            if not encoded_z:
+                return None
+            
         # make train and test arrays and ids
         ztrain, ztest, ids_train, ids_test = self.create_training_and_test()
         
@@ -138,7 +142,8 @@ class HMM(object):
         # compute 2 step full entropy
         print('# computing model entropy #')
         Hsp, Htrans, Hgauss = full_entropy(model)
-
+        print('..... Transition entropy = %.2f, Emission entropy = %.2f .....'%(Htrans, Hgauss))
+        
         # compute test log likelihood
         Ltest = [z.shape[0] for z in ztest]
         test_scores = self.get_loglikelihood(model, ztest, Ltest)
@@ -148,7 +153,7 @@ class HMM(object):
         # create 10 samples
         # concatenate the sequences because otherwise they are usually shorter than batch_size
         if self.save_output:
-            outputfolder = os.path.join(self.P.outpath, 'day_'+str(day_idx)+'_hiddensize_'+str(hidden_size))
+            outputfolder = os.path.join(self.P['outpath'], 'day_'+str(day_idx)+'_hiddensize_'+str(hidden_size))
             if not os.path.exists(outputfolder):
                 os.makedirs(outputfolder)
             # choose some ztrain for saving
@@ -156,9 +161,9 @@ class HMM(object):
             ztosave = [ztrain[i] for i in inds_to_save]
             ztosave = np.concatenate(ztosave, axis=0)
             # save samples
-            create_output(model, outpath, hidden_size, day_idx, self.P, self.netG, [])
+            create_output(model, outputfolder, hidden_size, day_idx, self.P, self.netG, [])
             # save real files
-            create_output(model, outpath, hidden_size, day_idx, self.P, self.netG, ztosave)
+            create_output(model, outputfolder, hidden_size, day_idx, self.P, self.netG, ztosave)
             print('# generated samples #')
 
         # get number of active states etc
@@ -170,7 +175,7 @@ class HMM(object):
                          'ztrain':ztrain,'ztest':ztest, 'std_active':std_active, 'ids_train':ids_train,
                          'ids_test':ids_test, 'Lengths_train':Ltrain,'Lengths_test':Ltest, 
                          'Entropies':[Hsp,Htrans,Hgauss], 'opts':hmm_opts}, 
-                         os.path.join(outputfolder, 'model_data_and_scores_day_'+str(idx)+'.pkl'))
+                         os.path.join(outputfolder, 'model_data_and_scores_day_'+str(day_idx)+'.pkl'))
         
         return model, test_scores, train_scores, med_active, std_active, Ltrain, Ltest
     
@@ -179,8 +184,8 @@ class HMM(object):
         K = self.P['hidden_state_size']
         # how many days are in the dataset
         Ndays = self.dataset.nfolders
-        # estimate models up to
-        if self.P.last_day == -1:
+        # estimate models up to last_day
+        if self.P['last_day']== -1:
             last_day = Ndays
         else:
             last_day = self.P['last_day']
@@ -194,20 +199,18 @@ class HMM(object):
             for j in range(len(K)):
                 start = time()
                 if not self.P['do_chaining']:
-                    # check if this model already exists
-                    outpath = os.path.join(self.P['outpath'], 'day_'+str(k)+'_hiddensize_'+str(K[j]),
-                                           'model_data_and_scores_day_'+str(k)+'.pkl')
-                    if not os.path.exists(outpath):
-                        results[k][j] = self.fit_single_day(k, K[j], None)
+                    results[k][j] = self.fit_single_day(k, K[j], None)
                 else:
+                    
                     # chaining means using fitted params from the previous model to initialize 
-                    if k > self.P.start_from and results[k-1][j] is not None:
+                    if k > self.P['start_from'] and results[k-1][j] is not None:
                         results[k][j] = self.fit_single_day(k, K[j], results[k-1][j][0])
                     else:
                         results[k][j] = self.fit_single_day(k, K[j], None)
+                
                 end = time()
                 
-                if results[k][j] and self.verbose:
+                if results[k][j] is not None and self.verbose:
                     print('..... day %d, hidden state size %d, train lls (avg over steps): %.4f, test lls (avg steps): %.4f .....' %(k, K[j],
                                                                                                           results[k][j][2] / results[k][j][5],
                                                                                                           results[k][j][1] / results[k][j][6]))
@@ -369,6 +372,6 @@ if __name__ == '__main__':
     for k,v in op.items():
         if k in hmm_opts.keys():
             hmm_opts[k] = v
-    pdb.set_trace()
-    hmm_ = HMM(args.datapath, args.netGpath, args.netEpath, hmm_opts, verbose = True, save_output=args.save_output)
+            
+    hmm_ = HMM(args.datapath, args.netEpath, args.netGpath, hmm_opts, verbose = True, save_output=args.save_output)
     results = hmm_.fit_all_days()

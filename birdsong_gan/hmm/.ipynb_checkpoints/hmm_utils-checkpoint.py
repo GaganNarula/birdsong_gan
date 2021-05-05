@@ -357,23 +357,20 @@ def create_output(model, outpath, hidden_size, idx, hmm_opts, netG, sequence=[])
                                           cuda = hmm_opts['cuda'], get_audio = hmm_opts['get_audio'])
     audio_out = [a[1] for a in spect_out]
     spect_out = [s[0] for s in spect_out]
-    # create output folder
-    outputfolder = os.path.join(outpath, 'day_'+str(idx)+'_hiddensize_'+str(hidden_size))
-    if not os.path.exists(outputfolder):
-        os.makedirs(outputfolder)
+    
     # save spectrograms
     if len(spect_out)==1:
         plt.figure(figsize=(50,10))
-        plt.imshow(spect_out[0], origin='lower', cmap = 'gray')
+        plt.imshow(rescale_spectrogram(spect_out[0]), origin='lower', cmap = 'gray')
         # real sequence
-        plt.savefig(os.path.join(outputfolder, 
+        plt.savefig(os.path.join(outpath, 
                              'reconstructed_sequence.eps'), dpi = 50, format='eps')
         plt.close()
     else:
-        for j in range(nsamps):
+        for j in range(hmm_opts['nsamps']):
             plt.figure(figsize=(50,10))
-            plt.imshow(spect_out[j], origin='lower', cmap = 'gray')
-            plt.savefig(os.path.join(outputfolder, 
+            plt.imshow(rescale_spectrogram(spect_out[j]), origin='lower', cmap = 'gray')
+            plt.savefig(os.path.join(outpath, 
                                  'hiddenstatesize_'+str(hidden_size)+'_sample_'+str(j)+'.eps'), 
                                      dpi = 50, format='eps')
             plt.close()
@@ -381,13 +378,12 @@ def create_output(model, outpath, hidden_size, idx, hmm_opts, netG, sequence=[])
     if hmm_opts['get_audio']:
         if len(audio_out)==1:
             save_audio_sample(audio_out[0], 
-                              os.path.join(outputfolder,'real_sequence.wav'), hmm_opts['sample_rate'])
+                              os.path.join(outpath,'real_sequence.wav'), hmm_opts['sample_rate'])
         else:
-            for j in range(nsamps):
-                save_audio_sample(audio_out[j], 
-                              os.path.join(outputfolder,
+            for j in range(hmm_opts['nsamps']):
+                save_audio_sample(audio_out[j], os.path.join(outpath,
                                            'hiddenstatesize_'+str(hidden_size)+'_sample_'+str(j)+'.wav'),
-                                 hmm_opts['sample_rate'])
+                                                    hmm_opts['sample_rate'])
 
                 
                 
