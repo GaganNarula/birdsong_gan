@@ -71,6 +71,103 @@ class _netG(nn.Module):
         return x
 
 
+class _netG_stylegan(nn.Module):
+    """Generator of type in Karras et al 2019 Improved Style GAN
+        https://arxiv.org/pdf/1812.04948.pdf
+    """
+    def __init__(self, nz, ngf, nc = 1, resks = 3, nw=200):
+        super(_netG_stylegan, self).__init__()
+        self.nz = nz
+        self.ngf = ngf
+        self.nc = nc
+        self.lnormlist = nn.ModuleList([nn.LayerNorm([ngf * 8, 3, 3]),
+                          nn.LayerNorm([ngf * 4, 8, 4]),
+                          nn.LayerNorm([ngf * 4, 8, 4]),
+                          nn.LayerNorm([ngf * 4, 8, 4]),
+                          nn.LayerNorm([ngf * 2, 31, 5]),
+                          nn.LayerNorm([ngf * 2, 31, 5]),
+                          nn.LayerNorm([ngf * 2, 31, 5]),
+                          nn.LayerNorm([ngf, 63, 8])
+                         ])
+        # layer wise scaling on noise
+        self.B = torch.exp(torch.randn(7))
+        # in style Gan
+        self.W_net = nn.Sequential(
+                        nn.Linear(nz, 100),
+                        nn.ReLU(True),
+                        nn.Linear(100, 100),
+                        nn.ReLU(True),
+                        nn.Linear(100, 200)
+        )
+        self.layer_maps = nn.ModuleList([ nn.Linear(nw, ngf*8*2),
+                                        nn.Linear(nw, ngf*4*2),
+                                        nn.Linear(nw, ngf*4*2),
+                                        nn.Linear(nw, ngf*4*2),
+                                        nn.Linear(nw, ngf*4*2),
+                                        nn.Linear(nw, ngf*2*2),
+                                        nn.Linear(nw, ngf*2*2),
+                                        nn.Linear(nw, ngf*2*2),
+                                        nn.Linear(nw, ngf*2)]
+                                       )
+        self.relu = nn.ReLU(True)
+        self.convs = nn.ModuleList([
+                      nn.ConvTranspose2d(nz, ngf * 8, kernel_size=(3,3), stride=1, padding=0, bias=False),
+                      
+                      nn.ConvTranspose2d(ngf*8, ngf * 4, kernel_size=(4, 4), stride=(3, 1), padding=(1, 1), bias=False),
+                      
+                      nn.ConvTranspose2d(ngf*4, ngf*4, kernel_size = resks, stride = 1, padding = resks//2,
+                                            bias = True),
+                      nn.ConvTranspose2d(ngf*4, ngf*4, kernel_size = resks, stride = 1, padding = resks//2,
+                                            bias = True),
+                      nn.ConvTranspose2d(ngf*4, ngf * 2, kernel_size=(5, 4), stride=(4, 1),
+                               padding=(1, 1), bias=False),
+                      nn.ConvTranspose2d(ngf*2, ngf*2, kernel_size = resks, stride = 1, padding = resks//2,
+                                            bias = True),
+                      nn.ConvTranspose2d(ngf*2, ngf*2, kernel_size = resks, stride = 1, padding = resks//2,
+                                            bias = True),
+                      nn.ConvTranspose2d(ngf * 2, ngf, kernel_size=(5, 4), stride=(2, 1), padding=(1, 0),
+                               bias=False),
+                      nn.ConvTranspose2d(ngf, nc, kernel_size=(5, 4), stride=(2, 2), padding=(0,1),
+                               bias=True)
+                      ])
+        self.activation_last = nn.Softplus()
+        self.nlayers = len(self.convs)
+    
+    def normalize_rescale_add_noise(self, x, w, noise, idx):
+        # convolve
+        x = self.convs[idx](x)
+        # generate noise
+        noise = self.B[idx]*torch.randn_like(x)
+        # normalize the input 
+        x = self.lnormlist(x)
+        # go over channels
+        A = self.layer_maps[idx](w)
+        
+    def forward(self, z):
+        # w mapping
+        w = self.W_net(z)
+        # 
+        x = z.view(z.size(0),self.nz,1,1)
+        # generate 
+        # layer 1 and 2
+        x = self.convs[0](x)
+        
+        
+        x = self.relu(self.convs[1](x))
+        # resblock 1 
+        h = self.relu(self.lnormlist[2](self.convs[2](x)))
+        h = self.relu(self.lnormlist[3](self.convs[3](h)))
+        x = x + h + self.B[0]*noise
+        x = self.relu(self.lnormlist[4](self.convs[4](x)))
+        # resblock 2 
+        h = self.relu(self.lnormlist[5](self.convs[5](x)))
+        h = self.relu(self.lnormlist[6](self.convs[6](h)))
+        x = x + h
+        x = self.relu(self.lnormlist[7](self.convs[7](x)))
+        x = self.convs[8](x)
+        x = self.activation_last(x)
+        return x
+    
     
 class _netE(nn.Module):
     def __init__(self, nz, ngf, nc = 1, resks = 3):

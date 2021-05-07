@@ -211,9 +211,9 @@ class HMM(object):
                 end = time()
                 
                 if results[k][j] is not None and self.verbose:
-                    print('..... day %d, hidden state size %d, train lls (avg over steps): %.4f, test lls (avg steps): %.4f .....' %(k, K[j],
-                                                                                                          results[k][j][2] / results[k][j][5],
-                                                                                                          results[k][j][1] / results[k][j][6]))
+                    print('..... day %d, hidden state size %d, train loglike: %.4f, test loglike: %.4f .....' %(k, K[j],
+                                                                                                          results[k][j][2],
+                                                                                                          results[k][j][1]))
                     print('..... avg number of active states %.2f, std dev %.2f .....'%(results[k][j][3], results[k][j][4]))
                     print('..... time taken %.1f secs ..... \n\n'%(end-start))
             self.Z =[] # empty this day's cache of latent vectors
