@@ -8,6 +8,7 @@ import pickle
 import itertools
 import fnmatch
 import shutil
+import soundfile as sf
 import torch
 import matplotlib.pyplot as plt
 plt.rcParams.update({'font.size': 16})
@@ -96,6 +97,19 @@ def normalize_spectrogram(image,threshold):
                 
 def load_netG(netG_file_path, nz = 16, ngf = 128, nc = 1, cuda = False, resnet = False):
     """Load the generator network
+    
+        Params
+        ------
+            netG_file_path : str, location of decoder/generator network file (torch state_dict)
+            nz : int, number of latent dimensions
+            ngf : int, multiplier of number of filters per conv layers
+            nc : int, (leave 1) number of channels (usually just gray-scale)
+            cuda : bool, whether to put on gpu (default device 0)
+            resnet : bool, whether this is a resnet type model
+        
+        Returns
+        -------
+            netG : decoder network
     """
     if resnet:
         from models.nets_16col_residual import _netG
@@ -111,6 +125,19 @@ def load_netG(netG_file_path, nz = 16, ngf = 128, nc = 1, cuda = False, resnet =
 
 def load_netE(netE_file_path, nz = 16, ngf = 128, nc = 1, cuda = False, resnet = False):
     """Load the encoder network
+    
+        Params
+        ------
+            netE_file_path : str, location of encoder network file (torch state_dict)
+            nz : int, number of latent dimensions
+            ngf : int, multiplier of number of filters per conv layers
+            nc : int, (leave 1) number of channels (usually just gray-scale)
+            cuda : bool, whether to put on gpu (default device 0)
+            resnet : bool, whether this is a resnet type model
+        
+        Returns
+        -------
+            netE : encoder network
     """
     if resnet:
         from models.nets_16col_residual import _netE
@@ -228,7 +255,7 @@ def overlap_encode(sample, netE, transform_sample = False, imageW = 16, noverlap
 
 
 def overlap_decode(Z, netG, noverlap = 0, get_audio = False, cuda = True):
-    """Overlap decode. For a given numpy array Z of shape 
+    """Overlap decode. For a given numpy array Z of shape (timesteps , latent_dim)
         the output spectrogram (and optionally also audio) is created. 
         Params
         -------
@@ -239,7 +266,7 @@ def overlap_decode(Z, netG, noverlap = 0, get_audio = False, cuda = True):
             get_audio : bool, to generate audio using Griffin Lim
             cuda : bool, if True pushes computation on gpu
         Returns
-        -------
+        -------(timesteps , latent_dim)
             X : numpy.ndarray, (nfft bins , chunks)
             X_audio : numpy array, reconstructed audio
     """

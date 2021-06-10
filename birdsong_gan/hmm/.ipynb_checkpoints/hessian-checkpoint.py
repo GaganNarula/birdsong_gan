@@ -390,16 +390,16 @@ def full_entropy(model):
 
 
 
-BASEPATH = '/Users/gagan/Desktop/MDGAN_hmm_dump/MDS_nz16_layernorm/'
 parser = argparse.ArgumentParser()
-parser.add_argument('--birdname')
-
+parser.add_argument('--birddatapath', type=str, required=True, help='path to bird hmms')
+parser.add_argument('--birdname', type = str, required=True)
+parser.add_argument('--cuda', action = 'store_true')
 
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    
-    all_folders = glob(BASEPATH + args.birdname + '/*day*')
+    # find all folders with the word day in the name
+    all_folders = glob(args.birddatapath + '/*day*')
     
     
     results = {}
