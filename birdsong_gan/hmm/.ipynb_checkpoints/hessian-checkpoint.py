@@ -62,7 +62,9 @@ def prepare_params_no_redundant(params):
 
 
 
-def logLLcalculation_scaled2(x, mu, varss, A, pi, T = 1):
+def logLLcalculation_scaled(x, mu, varss, A, pi, T = 1):
+    """Compute log likelihood of a single sequence
+    """
     K = mu.shape[0] # num states
     D = mu.shape[1] # num dims
     alpha = []
@@ -94,8 +96,14 @@ def logLLcalculation_scaled2(x, mu, varss, A, pi, T = 1):
 
 
 
-def logLLcalculation_scaled_noredudantA(x, mu, varss, A, pi, B, T = 1):
-    ''' A is not of full shape = [1:n, 1:n-1] and pi is not of full shape '''
+def logLLcalculation_scaled_noredudantA(x, mu, varss, A, pi, B, T = 1, cuda=False):
+    """Compute log-likelihood 
+        A is not of full shape = [1:n, 1:n-1] and pi is not of full shape 
+    """
+    if not isinstance(x, torch.Tensor):
+        x = torch.from_numpy(x).float()
+        if cuda: x = x.cuda
+
     K = mu.shape[0] # num states
     D = mu.shape[1] # num dims
     
@@ -103,7 +111,11 @@ def logLLcalculation_scaled_noredudantA(x, mu, varss, A, pi, B, T = 1):
     alpha = []
     C = []
     for k in range(K):
-        P = Tmvn(mu[k],varss[k]*torch.eye(D)).log_prob(x[0]).exp()
+        V = torch.eye(D)
+        if cuda:
+            V = V.cuda()
+        V = varss[k]*V
+        P = Tmvn(mu[k], V).log_prob(x[0]).exp()
         if k < K-1:
             alpha.append((pi[k] * P).view(1))
         else:
@@ -121,7 +133,11 @@ def logLLcalculation_scaled_noredudantA(x, mu, varss, A, pi, B, T = 1):
                 term2 = torch.dot(A[:,k], alphahat)
             else:
                 term2 = torch.dot(B, alphahat)
-            P = Tmvn(mu[k],varss[k]*torch.eye(D)).log_prob(x[t]).exp()
+            V = torch.eye(D)
+            if cuda:
+                V = V.cuda()
+            V = varss[k]*V
+            P = Tmvn(mu[k], V).log_prob(x[t]).exp()
 
             if torch.isinf(term2):
                 pdb.set_trace()
@@ -174,7 +190,7 @@ def create_hess_mat_sphericalvar_symm_noredundant(H, ndim = 16, nstates = 5):
     for k in range(nstates):
         x = Hcov[0][k].flatten() # vectorized matrix
         col2 = col1 + len(x)
-        Hess[row, col1:col2] = x.detach().numpy()
+        Hess[row, col1:col2] = x.detach().cpu().numpy()
         row += 1
     col1 = col2*1
     row = row_start*1
@@ -183,7 +199,7 @@ def create_hess_mat_sphericalvar_symm_noredundant(H, ndim = 16, nstates = 5):
     for k in range(nstates):
         x = Hcov[1][k] # already a vector now 
         col2 = col1 + len(x)
-        Hess[row, col1:col2] = x.detach().numpy()
+        Hess[row, col1:col2] = x.detach().cpu().numpy()
         row += 1
     col1 = col2*1
     row = row_start*1
@@ -192,7 +208,7 @@ def create_hess_mat_sphericalvar_symm_noredundant(H, ndim = 16, nstates = 5):
     for k in range(nstates):
         x = Hcov[2][k].flatten() # vectorized matrix
         col2 = col1 + len(x)
-        Hess[row, col1:col2] = x.detach().numpy()
+        Hess[row, col1:col2] = x.detach().cpu().numpy()
         row += 1
     col1 = col2*1
     row = row_start*1
@@ -201,7 +217,7 @@ def create_hess_mat_sphericalvar_symm_noredundant(H, ndim = 16, nstates = 5):
     for k in range(nstates):
         x = Hcov[3][k].flatten() # vectorized matrix
         col2 = col1 + len(x)
-        Hess[row, col1:col2] = x.detach().numpy()
+        Hess[row, col1:col2] = x.detach().cpu().numpy()
         row += 1
 
     col1 = 0
@@ -217,7 +233,7 @@ def create_hess_mat_sphericalvar_symm_noredundant(H, ndim = 16, nstates = 5):
         for j in range(ndim):
             x = Hmu[0][k,j].flatten() # vectorized matrix
             col2 = col1 + len(x)
-            Hess[row, col1:col2] = x.detach().numpy()
+            Hess[row, col1:col2] = x.detach().cpu().numpy()
             row += 1
     col1 = col2*1
     row = row_start*1
@@ -227,7 +243,7 @@ def create_hess_mat_sphericalvar_symm_noredundant(H, ndim = 16, nstates = 5):
         for j in range(ndim):
             x = Hmu[1][k,j] # now just a vector, no need to flatten
             col2 = col1 + len(x)
-            Hess[row, col1:col2] = x.detach().numpy()
+            Hess[row, col1:col2] = x.detach().cpu().numpy()
             row += 1
     col1 = col2*1
     row = row_start*1
@@ -237,7 +253,7 @@ def create_hess_mat_sphericalvar_symm_noredundant(H, ndim = 16, nstates = 5):
         for j in range(ndim):
             x = Hmu[2][k,j].flatten() # vectorized matrix
             col2 = col1 + len(x)
-            Hess[row, col1:col2] = x.detach().numpy()
+            Hess[row, col1:col2] = x.detach().cpu().numpy()
             row += 1
     col1 = col2*1
     row = row_start*1
@@ -247,7 +263,7 @@ def create_hess_mat_sphericalvar_symm_noredundant(H, ndim = 16, nstates = 5):
         for j in range(ndim):
             x = Hmu[3][k,j].flatten() # vectorized matrix
             col2 = col1 + len(x)
-            Hess[row, col1:col2] = x.detach().numpy()
+            Hess[row, col1:col2] = x.detach().cpu().numpy()
             row += 1
     row = row_start*1
     row += ndim*nstates
@@ -262,7 +278,7 @@ def create_hess_mat_sphericalvar_symm_noredundant(H, ndim = 16, nstates = 5):
         for j in range(nstates-1):
             x = HA[0][k,j].flatten() # vectorized matrix
             col2 = col1 + len(x)
-            Hess[row, col1:col2] = x.detach().numpy()
+            Hess[row, col1:col2] = x.detach().cpu().numpy()
             row += 1
     col1 = col2*1
     row = row_start*1
@@ -272,7 +288,7 @@ def create_hess_mat_sphericalvar_symm_noredundant(H, ndim = 16, nstates = 5):
         for j in range(nstates-1):
             x = HA[1][k,j] # vectorized matrix
             col2 = col1 + len(x)
-            Hess[row, col1:col2] = x.detach().numpy()
+            Hess[row, col1:col2] = x.detach().cpu().numpy()
             row += 1
     col1 = col2*1
     row = row_start*1
@@ -282,7 +298,7 @@ def create_hess_mat_sphericalvar_symm_noredundant(H, ndim = 16, nstates = 5):
         for j in range(nstates-1):
             x = HA[2][k,j].flatten() # vectorized matrix
             col2 = col1 + len(x)
-            Hess[row, col1:col2] = x.detach().numpy()
+            Hess[row, col1:col2] = x.detach().cpu().numpy()
             row += 1
     col1 = col2*1
     row = row_start*1
@@ -292,7 +308,7 @@ def create_hess_mat_sphericalvar_symm_noredundant(H, ndim = 16, nstates = 5):
         for j in range(nstates-1):
             x = HA[3][k,j].flatten() # vectorized matrix
             col2 = col1 + len(x)
-            Hess[row, col1:col2] = x.detach().numpy()
+            Hess[row, col1:col2] = x.detach().cpu().numpy()
             row += 1
     
     col1 = 0
@@ -337,18 +353,22 @@ def create_hess_mat_sphericalvar_symm_noredundant(H, ndim = 16, nstates = 5):
         row += 1
         
     # take only upper triangle
-    HH = np.zeros_like(Hess)
-    HH = np.triu(Hess)
-    Hess = HH + np.triu(Hess,k=1).T
+    #HH = np.zeros_like(Hess)
+    #HH = np.triu(Hess)
+    #Hess = HH + np.triu(Hess,k=1).T
     return Hess
 
 
 
-def compute_hessian(mu, varss, A, pi, B, data):
+def compute_hessian(mu, varss, A, pi, B, data, cuda=False):
     
     data = torch.from_numpy(data).float()
     data.requires_grad = False
-    H = torch.autograd.functional.hessian(lambda x1,x2,x3,x4: logLLcalculation_scaled_noredudantA(data,x1,x2,x3,x4,B,T=data.shape[0]), 
+    if cuda:
+        data = data.cuda()
+    H = torch.autograd.functional.hessian(lambda x1,x2,x3,x4: logLLcalculation_scaled_noredudantA(data,x1,x2,x3,x4,B,
+                                                                                                  T=data.shape[0],
+                                                                                                 cuda=cuda), 
                                       (mu,varss,A,pi), create_graph=False, strict=True)
     
     return create_hess_mat_sphericalvar_symm_noredundant(H, data.shape[-1], mu.shape[0]) 
@@ -428,6 +448,14 @@ if __name__ == '__main__':
     
         mu, cov, A, pi, B, _ = prepare_params_no_redundant(params)
         varss = cov[:,0,0]
+        
+        if args.cuda:
+            mu = mu.cuda()
+            varss = varss.cuda()
+            A  = A.cuda()
+            pi = pi.cuda()
+            B = B.cuda()
+            
         ndim = mu.shape[-1]
         nstates = mu.shape[0]
         totparams = ndim*nstates + nstates + (nstates*(nstates-1)) + (nstates-1)

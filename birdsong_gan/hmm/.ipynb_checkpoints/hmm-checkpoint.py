@@ -229,6 +229,8 @@ class HMM(object):
         del self.Z
         gc.collect()
         self.dataset.close()
+        self.dataset = None
+        
         
     
 def learnKmodels_getbest(data, lastmodel, Lengths, hidden_size, hmm_opts):

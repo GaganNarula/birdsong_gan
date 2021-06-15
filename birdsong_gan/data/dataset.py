@@ -231,6 +231,7 @@ class songbird_random_sample(object):
         with open(path2idlist, 'rb') as f:
             self.id_list = pickle.load(f)
             self.external_file_path = external_file_path
+            
     def __len__(self):
         # total number of samples
         return len(self.id_list)
@@ -254,12 +255,17 @@ class songbird_random_sample(object):
             
         return X, age_weights
 
+
     
-class songbird_data_sample(object):
+class songbird_data_sample(data.Dataset):
+    """This dataset retreives full spectrograms
+    
+    """
     def __init__(self, path2idlist, external_file_path):
         with open(path2idlist, 'rb') as f:
             self.id_list = pickle.load(f)
         self.external_file_path = external_file_path
+        
     def __len__(self):
         # total number of samples
         return len(self.id_list)
