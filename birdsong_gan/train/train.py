@@ -1,6 +1,6 @@
 import sys
 import os
-sys.path.append(os.path.split(os.getcwd())[0])
+sys.path.append(os.pardir)
 from configs.cfg import *
 import argparse
 import random

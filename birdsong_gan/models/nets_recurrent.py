@@ -39,17 +39,21 @@ class RecurrentNetv1(nn.Module):
         # x has shape (N, L, Hin)
         o, _ = self.rnn(x)
         # map each
+        z = []
         for t in range(o.size(1)):
             h = self.mlp(o[:,t,:])
             mu = self.mu_map(h)
             logvar = self.log_sigma_map(h)
             # sample output
-            
+            z.append(self.sample(mu, logvar))
         return torch.cat(z)
     
     def sample(self, mu, logvar):
-        
-        
+        S = torch.cat([torch.diag(V) for V in logvar])
+        S = torch.exp(S)
+        noise = torch.randn_like(mu)
+        return mu + torch.matmul(S, noise)
+    
     def split_input(self, x, ksteps_ahead)
         """splits input tensor on time axis as input and target"""
         return x[:,:-ksteps_ahead,:], x[:,ksteps_ahead:,:]
@@ -69,22 +73,46 @@ def train(model, dataloader, opts):
     if isinstance(opts,dict):
         # convert to named tuple
         opts = namedtuple('Options',opts)
-
+    
+    costfunc = nn.MSELoss(reduction='mean')
+    optimizer = torch.optim.Adam(model.parameters(), lr = opts.lr, l2 = opts.l2)
+    
+    N = len(dataloader)
+    train_loss = []
+    
     for n in range(opts.nepochs):
 
         for i, (x,age) in enumerate(dataloader):
+            
+            optimizer.zero_grad()
+            model.zero_grad()
+            
             # make sure the shape is (N,L,H)
             x = x.permute(0,2,1)
 
             # input is past values, predicted are future
             # split the tensor on the time axis to get target
             # and input 
-            x, y = model.split_input(x)
+            x, y = model.split_input(x, opts.ksteps_ahead)
 
             yhat = model(x)
             
+            # compute error
+            loss = costfunc(yhat , y)
+            loss.backward()
             
-                
+            optimizer.step()
+            train_loss.append(loss.item())
+
+            if i%opts.log_every == 0:
+                print("..... Epoch %d, minibatch [%d/%d], training loss = %.3f ....."%(n,i,N,train_loss[-1]))
+            
+            
+    return model, train_loss
+
+
+def evaluate(model, dataloader, opts):
+    pass
                 
                 
                 

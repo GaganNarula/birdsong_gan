@@ -1,7 +1,0 @@
-
-# to train a normal net from ipython (from shell use "python" instead of "%run")
-%run train.py --training_path '/home/gagan/data/zudeep/bird_hdfs/id_list_train.pkl' --test_path '/home/gagan/data/zudeep/bird_hdfs/id_list_test.pkl' --outf '/home/gagan/data/zudeep/models/nz_32_residual/' --subset_age_weights 0. 0.99 --batchSize 64 --lr 2e-5 --nz 32 --niter 12 --ngf 64 --ndf 64 --manualSeed 800 --lambdaa 100 --z_var 1. --log_every 1000 --cuda 
-
-
-# to train a residual net
-%run train.py --training_path '/home/gagan/data/zudeep/bird_hdfs/id_list_train.pkl' --test_path '/home/gagan/data/zudeep/bird_hdfs/id_list_test.pkl' --outf '/home/gagan/data/zudeep/models/nz_32_residual/' --subset_age_weights 0. 0.99 --batchSize 64 --lr 2e-5 --nz 32 --niter 12 --ngf 64 --ndf 64 --manualSeed 800 --lambdaa 100 --z_var 1. --log_every 1000 --cuda --train_residual

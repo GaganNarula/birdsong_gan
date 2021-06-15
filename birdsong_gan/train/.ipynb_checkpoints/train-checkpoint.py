@@ -1,6 +1,6 @@
 import sys
 import os
-sys.path.append(os.path.split(os.getcwd())[0])
+sys.path.append(os.pardir)
 from configs.cfg import *
 import argparse
 import random
@@ -122,7 +122,6 @@ def MDSLoss(encoding, data):
 
 
         
-# some cuda / cudnn settings for memory issues
 # some cuda / cudnn settings for memory issues#
 #torch.backends.cuda.matmul.allow_tf32 = True
 cudnn.deterministic = True
