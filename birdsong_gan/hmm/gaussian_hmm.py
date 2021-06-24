@@ -6,14 +6,34 @@ import pdb
 
 
 class GaussHMM(object):
-    def __init__(self, K, D = 2, learn_params = 'stmc', 
-                 startprob_prior_conc_weight = 1., 
-                 transmat_prior_conc_weight = 1.,
-                 mean_prior = 0., 
-                 covar_prior_weight = 1.,
-                 estimate_type = 'ML', do_kmeans = False,
-                 n_iters = 100, tolerance = 1e-5, 
+    """Gaussian emission discrete hidden markov model.
+        
+        Params
+        ------
+            K : int, number of states
+            D : int, number of observation dimensions
+            learn_params : str, which parameters to learn
+            startprob_prior_conc_weight : float, hyperparamater that controls the concentration
+                                            of the dirichlet distribution in each dimension of the 
+                                            starting state probability
+            transmat_prior_conc_weight : float, same as above, but for each row of the transition 
+                                            matrix
+            mean_prior : float, prior value for mean (same value used for all dimensions)
+            covar_prior_weight : float, prior value for the scale matrix in Inverse Wishart distrib
+            estimate_type : str, either ML or MAP for max likelihood of max aposteriori estimate of 
+                                params
+            do_kmeans : bool, whether to initialze the means and covars with kmeans or gmm
+            n_iters : int, number of EM iterations
+            tolerance : float, smallest change in loglikelihood below which EM iteration stops
+            verbose : bool, whether to print loglikelihood values during EM iterations
+            
+        
+    """
+    def __init__(self, K: int, D: int, learn_params = 'stmc', startprob_prior_conc_weight = 1., 
+                 transmat_prior_conc_weight = 1., mean_prior = 0., covar_prior_weight = 1.,
+                 estimate_type = 'ML', do_kmeans = False, n_iters = 100, tolerance = 1e-5, 
                 verbose = True):
+        
         self.D = D # num feature dims
         self.nstates = K # num components
         self.n_iters = n_iters
@@ -22,15 +42,20 @@ class GaussHMM(object):
         self.estimate_type = estimate_type
         self.verbose = verbose
         self.tolerance = tolerance
+        
+        if not isinstance(estimate_type, str):
+            raise ValueError("Estimate type has to be a string either 'ML' or 'MAP'")
+            
         if self.estimate_type == 'ML':
             self.startprob_prior_conc = np.ones(self.nstates)
             self.transmat_prior_conc = np.ones(self.nstates)
-        else:
+        elif self.estimate_type == 'MAP':
             self.transmat_prior_conc = transmat_prior_conc_weight*np.ones(self.nstates)
             self.startprob_prior_conc = startprob_prior_conc_weight*np.ones(self.nstates)
             
         self.prior_mean = mean_prior*np.ones(D)
         self.covar_prior = covar_prior_weight*np.eye(D)
+        
         # initialize parameters
         self._init_params()
     
@@ -75,6 +100,7 @@ class GaussHMM(object):
         return stats
     
     def makeLRtransmat(self):
+        """ Creates a Left-right transition matrix """
         self.transmat = np.zeros((self.K, self.K))
         for k in range(self.K-1):
             self.transmat[k,k] = 0.5
@@ -95,6 +121,7 @@ class GaussHMM(object):
                 self.emission_logP[t,k] = self.logGausspdf(x[t], k)
     
     def forward_recursion_rescaled(self, x):
+        "Forward recursion in log space "
         self.D = x.shape[1]
         self.get_emission_logprobs(x)
         # timesteps
@@ -119,6 +146,7 @@ class GaussHMM(object):
         return alphahat, c
     
     def backward_recursion_rescaled(self, x, c):
+        "Backward recursion in log space "
         T = x.shape[0]
         betahat = np.zeros((T, self.nstates))
         beta = np.zeros((T, self.nstates))
@@ -133,9 +161,11 @@ class GaussHMM(object):
         return betahat
                 
     def compute_gamma(self, alphahat, betahat):
+        """Posterior P(hidden | obs)"""
         return (alphahat * betahat)
     
     def compute_sigma(self, alphahat, betahat, c):
+        """Pairwise posterior """
         T = alphahat.shape[0]
         # sigma_matrix has shape [timesteps x prev_states x current_states]
         sigma_matrix = np.zeros((T, self.nstates, self.nstates))

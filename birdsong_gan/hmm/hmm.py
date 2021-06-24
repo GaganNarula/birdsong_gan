@@ -1,4 +1,4 @@
-from hmm_utils import *
+from .hmm_utils import *
 import pdb
 import gc
 import warnings
