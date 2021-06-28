@@ -219,10 +219,12 @@ class GaussHMM(object):
         ''' M-step for N i.i.d sequences 
             Parameters
             ----------
-                Y : list of N numpy arrays, each element of list is an observed data sequence
-                GAMMAS : list of N numpy arrays of posterior probs P(x_t|y_{1:T})
-                SIGMAS : list of N numpy arrays of posterior pairwise probs P(x_t,x_{t+1}|y_{1:T})
-                lengths : lengths
+                stats : dict, contains updates for all parameters
+                            fields:
+                                - pi startprob
+                                - A transmat
+                                - mu means
+                                - cov covariances
         '''
         # update start probability vector
         if 's' in self.learn_params:
