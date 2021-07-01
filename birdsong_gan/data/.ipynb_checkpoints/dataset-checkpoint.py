@@ -112,6 +112,7 @@ def phase_restore(mag, random_phases, n_fft, N=50):
     return p
 
 
+
 class songbird_dataset(data.Dataset):
     '''
         Dataset class used for training neural nets. 
@@ -257,14 +258,26 @@ class songbird_random_sample(object):
 
 
     
-class songbird_data_sample(data.Dataset):
+class songbird_full_spectrogram(data.Dataset):
     """This dataset retreives full spectrograms
-    
+        Useful for recurrent network training.
+        
+        __getitem__() method is used by pytorch to
+        retrieve a single sample from the dataset.
     """
-    def __init__(self, path2idlist, external_file_path):
+    def __init__(self, path2idlist, external_file_path = '', subset_age = None,
+                max_length = 300):
+        
         with open(path2idlist, 'rb') as f:
             self.id_list = pickle.load(f)
+            
+        if subset_age is not None:
+            w = np.array([i['age_weight'] for i in self.id_list])
+            idx = np.where((subset_age[0] < w) & (w <= subset_age[1]))[0]
+            self.id_list = [self.id_list[i] for i in idx]
+            
         self.external_file_path = external_file_path
+        self.max_length = max_length
         
     def __len__(self):
         # total number of samples
@@ -283,7 +296,19 @@ class songbird_data_sample(data.Dataset):
             f = h5py.File(ID['filepath'], 'r') 
         x = np.array(f.get(ID['within_file']))
         f.close()
-        return x, age_weight
+        
+        x = transform(x)
+        x = self.pad_to_maxlength(x)
+        
+        return torch.from_numpy(x).float(), torch.Tensor([age_weight]).float()
+    
+    def pad_to_maxlength(self, x):
+        if x.shape[1] >= self.max_length:
+            return x[:,:self.max_length]
+        # else pad right
+        x = np.concatenate([x, np.zeros((x.shape[0], self.max_length-x.shape[1]))],axis=1)
+    
+        return x
     
     def get_contiguous_minibatch(self, start_idx, mbatchsize=64):
         ids = np.arange(start=start_idx, stop=start_idx+mbatchsize)
@@ -335,7 +360,7 @@ class bird_dataset(object):
             idx = np.arange(len(nfiles))
         else:
             idx = np.random.choice(len(nfiles), size = nsamps, replace=False)
-        X = [None for i in range(nsamps)]
+        X = [None for i in range(len(idx))]
         for (k,i) in enumerate(idx):
             X[k] = transform(np.array(self.file.get(day + '/' + nfiles[i])))
         return X
@@ -415,6 +440,7 @@ class songbird_syllable_dataset(data.Dataset):
                 X = X[:,:N]
         return X
     
+
     
 def segment_spectrogram(x, thresh = 5, mindur = 5):
     ''' Segment a spectrogram with amplitude thresholding 
