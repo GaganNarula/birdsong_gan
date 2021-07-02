@@ -65,6 +65,7 @@ def save_spectrogram(filename,D):
     
     
 def inverse_transform(im, nfft=256, N=50):
+    """Phase restoration with Griffin Lim algorithm"""
     random_phase = im.copy()
     np.random.shuffle(random_phase)
     p = phase_restore((np.exp(im) - 1), random_phase, nfft, N)
@@ -72,6 +73,9 @@ def inverse_transform(im, nfft=256, N=50):
 
 
 def transform(im):
+    """Converts polar coordinate stft of a spectrogram
+        to magnitude and phase, then returns log(1 + magnitude)
+    """
     im = from_polar(im)
     im,phase = lc.magphase(im)
     im = np.log1p(im)
