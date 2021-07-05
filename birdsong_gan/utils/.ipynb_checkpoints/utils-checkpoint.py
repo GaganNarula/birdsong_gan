@@ -234,8 +234,10 @@ def overlap_encode(sample, netE, transform_sample = False, imageW = 16, noverlap
     Z = []
     notdone = True
     idx = 0
+    
     if transform_sample:
         sample = transform(sample)
+        
     with torch.no_grad():
         while notdone:
             if idx + imageW > sample.shape[-1]:
@@ -277,6 +279,20 @@ def overlap_decode(Z, netG, noverlap = 0, get_audio = False, cuda = True):
     X = []
     X_audio = []
     idx = 0
+    
+    # in case only one chunk
+    if Z.ndim==1 or Z.shape[0]==1:
+        with torch.no_grad():
+            z = torch.from_numpy(Z).float()
+            z = z.view(1, z.size(0), 1, 1)
+            if cuda:
+                z = z.cuda()
+            x = netG(z).cpu().numpy().squeeze()
+            if get_audio:
+                xa = inverse_transform(x, N=500)
+                xa = lc.istft(xa)*2
+                return x, xa
+            
     with torch.no_grad():
         for i in range(Z.shape[0]):
             z = torch.from_numpy(Z[i]).float()
@@ -293,12 +309,15 @@ def overlap_decode(Z, netG, noverlap = 0, get_audio = False, cuda = True):
             if get_audio:
                 xa = inverse_transform(x, N=500)
                 X_audio.append(xa)
+                
     X = np.concatenate(X, axis=1)
     if get_audio:
         X_audio = np.concatenate(X_audio, axis=1)
         X_audio = lc.istft(X_audio)*2
+        
     return X, X_audio
     
+
     
 def encode_and_decode(sample, netE, netG, batch_size=64, method=1, \
                       imageH=129, imageW=8, cuda= True, transform_sample=True, return_tensor=False):

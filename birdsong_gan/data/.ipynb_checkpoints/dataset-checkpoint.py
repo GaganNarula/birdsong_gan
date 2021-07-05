@@ -239,12 +239,15 @@ class songbird_random_sample(object):
     
     def get(self, nsamps=1):
         # choose nsamp random files
-        idx = np.random.randint(low = 0, high = self.__len__(), size = nsamps)
+        idx = np.random.choice(self.__len__(), size=nsamps, replace=False)
+        
         X = [None for i in range(nsamps)]
         age_weights = [None for i in range(nsamps)]
+        
         for (k,i) in enumerate(idx):
             ID = self.id_list[i]
             age_weights[k] = ID['age_weight']
+            
             if self.external_file_path:
                 birdname = os.path.basename(ID['filepath'])
                 f = h5py.File(os.path.join(self.external_file_path, birdname),'r')
@@ -256,7 +259,7 @@ class songbird_random_sample(object):
             
         return X, age_weights
 
-
+    
     
 class songbird_full_spectrogram(data.Dataset):
     """This dataset retreives full spectrograms

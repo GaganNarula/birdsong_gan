@@ -63,6 +63,12 @@ def downsample(x,down_factor):
     return x[(nextpow2-n)//down_factor:]
 
 
+def librosa_downsample(x, target_fs, orig_fs, res_type='kaiser_best'):
+    """Downsample audio signal using librosa"""
+    return lc.resample(x, target_sr=target_fs, orig_sr=orig_fs, res_type=res_type,
+               fix=True, scale=True) 
+    
+    
 def to_image(seq,nfft):
     ''' Spectrogram computation for a sequence seq 
         Returns
@@ -132,8 +138,7 @@ def make_IDs(birdhdfpath, birdname, id_list, age_weight_list, cnt):
 
 def create_bird_spectrogram_hdf(birdname, birddatapath, outpath, extention = 'songs', downsample_factor=2, 
                                 nfft=256, standardize=False, compress_type='gzip', compress_idx=9) -> None:
-    '''
-    Creates HDF file for this bird. Each day of recording is a Group, 
+    '''Creates HDF file for this bird. Each day of recording is a Group, 
     and the spectrogram of each wav file is a Dataset in a Group.
     Attributes are added for each group.
     
@@ -164,7 +169,7 @@ def create_bird_spectrogram_hdf(birdname, birddatapath, outpath, extention = 'so
         if len(ages)==1:
             ages = [ages[0] for i in range(len(folders))]
         # go through each folder, load files, downsample (optional), standardize (optional) and create STFTs
-        save_idx = 0
+
         for (k,fold) in enumerate(folders):
             # create group
             d = birdfile.create_group(fold)
@@ -188,6 +193,72 @@ def create_bird_spectrogram_hdf(birdname, birddatapath, outpath, extention = 'so
                     # save spectrogram
                     fnam = filenames[i].split('/')[-1] +'_'+ str(ages[k])
                     d.create_dataset(fnam, data=im, compression = compress_type, compression_opts = compress_idx)
+
+    end = time()
+    print('..... bird %s finished in %.2f secs.....'%(birdname, end-start)) 
+    
+    
+
+def create_bird_spectrogram_hdf_external(birdname, birddatapath, outpath, target_sampling_rate=16000, standardize=False, nfft=256,
+                                        compress_type='gzip', compression_idx=9) -> None:
+    
+    '''Creates HDF file for this bird. External data may be structured in different ways,
+        so this function simply finds all available .wav files and then creteas an hdf using
+        those.
+        
+    Params
+    ------
+        birdname : str, e.g. 'b10r16'
+        birddatapath : folder containing song recordings in individual folders.
+                        E.g. /b10r16/SAP/
+        outpath : str, folder name where hdf files will be created
+        target_sampling_rate : int, resampling the signal to this rate(Hz)
+        nfft : int, number of fft points for spectrogram default 256.
+        standardize : bool, whether to scale spectrograms by standard deviation
+        compress_type : str, one of valid h5py compression formats {'gzip','lzf', 'szip'}
+        compress_idx : int [0-9] amount of compression, higher values = more compression
+                        but lower disk i/o speed.
+    Returns
+    -------
+        None
+    '''
+    start = time()
+    # create hdf file for this bird in the outpath folder
+    with h5py.File(join(outpath, birdname), 'w') as birdfile:
+        
+        wav_files = []
+        for r,d,f in os.walk(birddatapath):
+            for file in f:
+                if ".wav" in file:
+                    wav_files.append(os.path.join(r,file))
+        print('..... bird %s number of songs = %d .....'%(birdname, len(wav_files)))
+        
+        # age is considered missing, so set to Inf
+        age = np.nan
+        
+        # go through each folder, load files, downsample (optional), standardize (optional) and create STFTs
+        d = birdfile.create_group(birdname)
+        d.attrs['CLASS'] = 'STFT_with_Magnitude_and_Phase(2nd index in last dimension)'
+        d.attrs['DTYPE'] = 'float32'
+        d.attrs['PSEUDO_AGE'] = age
+        d.attrs['nfft'] = nfft
+        d.attrs['fs'] = target_sampling_rate
+        d.attrs['standardized'] = standardize
+        
+        for wav in wav_files:
+            # load the file
+            song, fs = load_wav_file(wav)
+        
+            if target_sampling_rate is not None:
+                song = librosa_downsample(song, target_sampling_rate, fs)
+                
+                if standardize:
+                    songs = song/np.std(song)
+                    
+            # compute spectrogram
+            im = to_image(song, nfft)
+            
+            d.create_dataset(wav, data=im, compression = compress_type, compression_opts = compression_idx)
 
     end = time()
     print('..... bird %s finished in %.2f secs.....'%(birdname, end-start)) 
