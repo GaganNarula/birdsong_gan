@@ -291,6 +291,7 @@ def split_ids_train_test(id_list, train_test_ratio = 0.9):
 
 def create_hdfs(path2wavs, out_path, extention='SAP_allfiles', extention2 = 'songs', 
                 downsample_factor = 2, nfft = 256):
+    """ Loop over birds and create hdfs per bird """
     birds = os.listdir(path2wavs)
     for b in birds:
         print('\n ..... bird is %s ....\n'%(b))
