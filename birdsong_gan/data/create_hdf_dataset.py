@@ -8,9 +8,11 @@ import h5py
 from time import time
 from random import shuffle
 import pdb
-from scipy.signal import resample
+from scipy.signal import resample, iirfilter, sosfiltfilt
 import librosa as lc
 from librosa.util import fix_length
+from dataset import segment_spectrogram, transform
+
 
 
 def load_from_folder(base_path, folder_path, extention):
@@ -52,7 +54,14 @@ def load_wav_file(path):
     return samples, fs
 
 
-
+def bandpass_filter(x, order=6, cutoffs = [400, 12000], ftype='butter',
+                   btype='bandpass', fs=16000):
+    cutoffs = [cutoffs[0] / (fs/2), cutoffs[1] / (fs/2)]
+    sos = iirfilter(order, cutoffs, analog=False, ftype=ftype, 
+                   btype=btype, rp=0, rs=60, output='sos')
+    return sosfiltfilt(sos, x - np.mean(x)) + np.mean(x)
+    
+    
 def downsample(x,down_factor):
     ''' Downsample audio x by factor down_factor '''
     n = x.shape[0]
@@ -200,7 +209,7 @@ def create_bird_spectrogram_hdf(birdname, birddatapath, outpath, extention = 'so
     
 
 def create_bird_spectrogram_hdf_external(birdname, birddatapath, outpath, target_sampling_rate=16000, standardize=False, nfft=256,
-                                        compress_type='gzip', compression_idx=9) -> None:
+                                        min_syll_dur_frames=20, energy_thresh_percent=0.1, compress_type='gzip', compression_idx=9) -> None:
     
     '''Creates HDF file for this bird. External data may be structured in different ways,
         so this function simply finds all available .wav files and then creteas an hdf using
@@ -233,32 +242,56 @@ def create_bird_spectrogram_hdf_external(birdname, birddatapath, outpath, target
                     wav_files.append(os.path.join(r,file))
         print('..... bird %s number of songs = %d .....'%(birdname, len(wav_files)))
         
-        # age is considered missing, so set to Inf
-        age = np.nan
-        
         # go through each folder, load files, downsample (optional), standardize (optional) and create STFTs
         d = birdfile.create_group(birdname)
         d.attrs['CLASS'] = 'STFT_with_Magnitude_and_Phase(2nd index in last dimension)'
         d.attrs['DTYPE'] = 'float32'
-        d.attrs['PSEUDO_AGE'] = age
+        d.attrs['PSEUDO_AGE'] = np.nan
         d.attrs['nfft'] = nfft
         d.attrs['fs'] = target_sampling_rate
         d.attrs['standardized'] = standardize
         
         for wav in wav_files:
+            # extract last name
+            rel_path1, fname = os.path.split(wav)
+            rel_path2, gname = os.path.split(rel_path1)
+            
             # load the file
             song, fs = load_wav_file(wav)
-        
-            if target_sampling_rate is not None:
-                song = librosa_downsample(song, target_sampling_rate, fs)
-                
-                if standardize:
-                    songs = song/np.std(song)
-                    
+            
+            # band pass filter low freq noise
+            song = bandpass_filter(song, 12, fs=fs)
+            # downsample to target rate
+            song = librosa_downsample(song, target_sampling_rate, fs)
+
+            if standardize:
+                songs = song/np.std(song)
+            
             # compute spectrogram
             im = to_image(song, nfft)
+            im_mag = transform(im)
+            imsum = im_mag.sum(axis=0)
             
-            d.create_dataset(wav, data=im, compression = compress_type, compression_opts = compression_idx)
+            # segment syllables , use only magnitude part.
+            # threshold is set as minimum energy + 20% of energy range in the spectrogram
+            _, _, _, onsets, offsets = segment_spectrogram(im_mag, thresh=np.min(imsum) + 
+                                                           energy_thresh_percent*(np.min(imsum)+np.max(imsum)),
+                                                            mindur = min_syll_dur_frames)
+            if onsets is None:
+                continue
+                
+            # vocal segments : pad each vocal segment (syllable) with 0 on each side.
+            # vocal segments should be at least min_syll_dur_frames long
+            
+            for k in range(len(onsets)):
+                if offsets[k] - onsets[k] < min_syll_dur_frames:
+                    continue
+                # zero pad this segment and use
+                vocal_segment = np.concatenate([np.zeros((im.shape[0], 10, 2)), im[:,onsets[k]:offsets[k],:],
+                                               np.zeros((im.shape[0], 10, 2))], axis=1)
+                
+                d.create_dataset(os.path.join(gname, fname+'_'+str(k)), data=vocal_segment, 
+                                 compression = compress_type, compression_opts = compression_idx)
 
     end = time()
     print('..... bird %s finished in %.2f secs.....'%(birdname, end-start)) 

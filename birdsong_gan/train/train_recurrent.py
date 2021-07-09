@@ -110,8 +110,9 @@ def train(model, traindataloader, testdataloader, opts):
         
         # evaluate on test / validation set
         val_loss = evaluate(model, testdataloader, opts)
+        print("..... Epoch %d, validation loss = %.3f ....."%(n, np.mean(val_loss)))
         
-    return model, np.array(train_loss)
+    return model, np.array(train_loss), val_loss
 
 
 

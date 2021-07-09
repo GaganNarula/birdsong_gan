@@ -485,7 +485,7 @@ def segment_spectrogram(x, thresh = 5, mindur = 5):
     gap_start = 0
     to_remove = []
     if len(ON)==0:
-        return None
+        return None,None,None,None,None
     for k in range(len(onsets)):
         vocal_segs.append(x[:, ON[k] : OFF[k]])
         durations.append(OFF[k] - ON[k])
