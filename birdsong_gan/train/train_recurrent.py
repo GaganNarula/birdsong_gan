@@ -206,6 +206,10 @@ def main():
     # train
     model, train_loss = train(model, train_dataloader, test_dataloader, opts_dict)
     
-    
+    return model
+
+
+
+main()
     
     

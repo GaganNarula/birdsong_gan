@@ -297,7 +297,13 @@ def create_bird_spectrogram_hdf_external(birdname, birddatapath, outpath, target
     print('..... bird %s finished in %.2f secs.....'%(birdname, end-start)) 
     
     
-    
+def get_dataset_keys(f):
+    """Get all dataset names in an hdf file"""
+    keys = []
+    f.visit(lambda key : keys.append(key) if isinstance(f[key], h5py.Dataset) else None)
+    return keys
+
+
 def make_ID_list(path2birdhdfs):
     ''' Loop over the birds and make id lists '''
     birds = os.listdir(path2birdhdfs)
