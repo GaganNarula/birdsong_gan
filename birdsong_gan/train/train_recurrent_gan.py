@@ -53,7 +53,7 @@ def true_wp(prob, size, device):
 
     
 def mdgan_loss(x, x_hat, x_samp, z_hat, z, y_hat_real, y_hat_real2, y_hat_fake, y_hat_recon,
-              costfunc, downsample_func, gan_loss, device, d_prob, 
+               y_hat_fake_G, y_hat_recon_G, costfunc, downsample_func, gan_loss, device, d_prob, 
                y_hat_fake_incep=None, y_hat_real3=None):
     """MDGAN loss + cycle loss
         Params
@@ -67,7 +67,12 @@ def mdgan_loss(x, x_hat, x_samp, z_hat, z, y_hat_real, y_hat_real2, y_hat_fake, 
             y_hat_real2 : predicted label for real input data for discriminator_ReVR
             y_hat_fake : predicted label on x_samp
             y_hat_recon : predicted label on reconstructed data
-            costfunc : 
+            y_hat_fake_G : predicted label on x_samp, for generator loss (torch issues)
+            y_hat_recon_G : predicted label on x_hat, for autoencoder loss (torch issues)
+            costfunc : L2 / L1 recon loss
+            downsample_func : part of recon loss
+            gan_loss : binary cross entropy with neg log 
+            
         Returns
         -------
             loss1 : recon loss on input
@@ -76,30 +81,30 @@ def mdgan_loss(x, x_hat, x_samp, z_hat, z, y_hat_real, y_hat_real2, y_hat_fake, 
     """
     # compute errors
     # reconstruction error
-    loss1 = costfunc(x_hat, x) + costfunc(downsample_func(x_hat), downsample_func(x))
+    loss0 = costfunc(x_hat, x) + costfunc(downsample_func(x_hat), downsample_func(x))
     # cycle loss
-    loss2 = costfunc(z_hat, z)
+    loss1 = costfunc(z_hat, z)
     
     # gan loss for real data, discriminator needs to minimize this - E[log(D_fakevsreal(x)))]
-    loss3 = gan_loss(y_hat_real, true_wp(d_prob, y_hat_real.size(), device))
+    loss2 = gan_loss(y_hat_real, true_wp(d_prob, y_hat_real.size(), device))
     # discriminator 1 needs to minimize -E[ log(1 - D(G(z)))]
-    loss4 = gan_loss(y_hat_fake, true_wp(1.-d_prob, y_hat_fake.size(),device))
+    loss3 = gan_loss(y_hat_fake, true_wp(1.-d_prob, y_hat_fake.size(),device))
     # gan loss for reconstructed data, discriminator 2 needs to minimize this -E[ log(1-D(G(E(x)))) ]
-    loss5 = gan_loss(y_hat_recon, true_wp(1.-d_prob, y_hat_recon.size(),device))
+    loss4 = gan_loss(y_hat_recon, true_wp(1.-d_prob, y_hat_recon.size(),device))
     # discriminator 2 needs to minimize -E [ log(D_reconvsreal(x))]
-    loss6 = gan_loss(y_hat_real2, true_wp(d_prob, y_hat_real2.size(), device))
+    loss5 = gan_loss(y_hat_real2, true_wp(d_prob, y_hat_real2.size(), device))
     # for decoder/generator, minimize - E[ log(D(G(z)))]
-    loss7 = gan_loss(y_hat_fake, true_wp(1., y_hat_fake.size(),device))
+    loss6 = gan_loss(y_hat_fake_G, true_wp(1., y_hat_fake.size(),device))
     # for autoencoder
-    loss8 = gan_loss(y_hat_recon, true_wp(1., y_hat_fake.size(),device))
+    loss7 = gan_loss(y_hat_recon_G, true_wp(1., y_hat_recon.size(),device))
     
     if y_hat_fake_incep is not None:
-        loss9 = gan_loss(y_hat_real3, true_wp(1., y_hat_real3.size(), device))
-        loss9 += gan_loss(y_hat_fake_incep, true_wp(0., y_hat_fake_incep.size(), device))
+        loss8 = gan_loss(y_hat_real3, true_wp(1., y_hat_real3.size(), device))
+        loss8 += gan_loss(y_hat_fake_incep, true_wp(0., y_hat_fake_incep.size(), device))
     else:
-        loss9 = None
+        loss8 = None
         
-    return loss1, loss2, loss3, loss4, loss5, loss6, loss7, loss8, loss9
+    return loss0, loss1, loss2, loss3, loss4, loss5, loss6, loss7, loss8
 
 
 
@@ -129,14 +134,14 @@ def evaluate(model, testdataloader, costfunc, downsample_func,
             z_hat = model.encode(x_samp)
             
             # discriminator 1 output for real
-            y_hat_real = model.discrimate(x, model.disc_FvR)
+            y_hat_real = model.discriminate(x.detach(), model.disc_FvR)
             # discriminator 1 output for fake
-            y_hat_fake = model.discrimate(x_samp, model.disc_FvR)
+            y_hat_fake = model.discriminate(x_samp, model.disc_FvR)
             
             # discriminator 2 output for reconstruction
-            y_hat_recon = model.discrimate(x_hat, model.disc_RevR)
+            y_hat_recon = model.discriminate(x_hat, model.disc_RevR)
             # discriminator 2 output for real
-            y_hat_real2 = model.discrimate(x, model.disc_RevR)
+            y_hat_real2 = model.discriminate(x, model.disc_RevR)
             
             loss = mdgan_loss(x, x_hat, x_samp, z_hat, z, y_hat_real, y_hat_real2, 
                               y_hat_fake, y_hat_recon, costfunc, downsample_func, 
@@ -220,6 +225,7 @@ def train(model, traindataloader, testdataloader, opts):
             optimizer_G.zero_grad()
             optimizer_D1.zero_grad()
             optimizer_D2.zero_grad()
+            optimizer_D3.zero_grad()
             
             if opts['cuda']:
                 x = x.cuda()
@@ -236,25 +242,29 @@ def train(model, traindataloader, testdataloader, opts):
             z_hat = model.encode(x_samp)
             
             # discriminator 1 output for real
-            y_hat_real = model.discriminate(x, model.disc_FvR)
+            y_hat_real = model.discriminate(x.detach(), model.disc_FvR)
             # discriminator 1 output for fake
-            y_hat_fake = model.discriminate(x_samp, model.disc_FvR)
+            y_hat_fake_D = model.discriminate(x_samp, model.disc_FvR)
+            # because generator is already in graph once, need to do this again
+            x_samp2 = model.decode(z.detach())
+            y_hat_fake_G = model.discriminate(x_samp2, model.disc_FvR)
             
             # discriminator 2 output for reconstruction
-            y_hat_recon = model.discriminate(x_hat, model.disc_RevR)
+            y_hat_recon = model.discriminate(x_hat.detach(), model.disc_RevR)
+            # again, for generator/encoder, combo need to run again
+            y_hat_recon_G = model.discriminate(x_hat, model.disc_RevR)
+            
             # discriminator 2 output for real
-            y_hat_real2 = model.discriminate(x, model.disc_RevR)
+            y_hat_real2 = model.discriminate(x.detach(), model.disc_RevR)
             
             # discriminator 3 (inception net)
-            # sample some fake trajectories
-            
             # discriminator 3 output for rfake
             y_hat_fake_incep = model.discriminate(x_samp.detach(), model.inception_net)
             # discriminator 3 output for real
             y_hat_real3 = model.discriminate(x.detach(), model.inception_net)
             
             loss = mdgan_loss(x, x_hat, x_samp, z_hat, z, y_hat_real, y_hat_real2, 
-                              y_hat_fake, y_hat_recon,
+                              y_hat_fake, y_hat_recon, y_hat_fake_G, y_hat_recon_G,
                               recon_func, downsample_func, gan_loss, device, d_prob,
                               y_hat_fake_incep, y_hat_real3)
             
@@ -267,12 +277,15 @@ def train(model, traindataloader, testdataloader, opts):
             
             optimizer_D1.step()
             optimizer_D2.step()
+            optimizer_D1.zero_grad()
+            optimizer_D2.zero_grad()
             
             # inception net
             loss[8].backward()
             optimizer_D3.step()
             
             # recon loss 
+            pdb.set_trace()
             loss_autencoder = opts['lambda']*loss[0] + loss[1] + loss[7]
             loss_autencoder.backward()
             optimizer_GE.step()
