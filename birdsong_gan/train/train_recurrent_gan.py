@@ -134,7 +134,7 @@ def evaluate(model, testdataloader, costfunc, downsample_func,
             z_hat = model.encode(x_samp)
             
             # discriminator 1 output for real
-            y_hat_real = model.discriminate(x.detach(), model.disc_FvR)
+            y_hat_real = model.discriminate(x, model.disc_FvR)
             # discriminator 1 output for fake
             y_hat_fake = model.discriminate(x_samp, model.disc_FvR)
             
@@ -144,8 +144,9 @@ def evaluate(model, testdataloader, costfunc, downsample_func,
             y_hat_real2 = model.discriminate(x, model.disc_RevR)
             
             loss = mdgan_loss(x, x_hat, x_samp, z_hat, z, y_hat_real, y_hat_real2, 
-                              y_hat_fake, y_hat_recon, costfunc, downsample_func, 
-                              gan_loss, device, d_prob)
+                               y_hat_fake, y_hat_recon, y_hat_fake, y_hat_recon,
+                               costfunc, downsample_func, gan_loss, device, d_prob, 
+                               y_hat_fake_incep=None, y_hat_real3=None)
             
             loss_disc_FvR = loss[2] + loss[3]
             loss_disc_RevR = loss[4] + loss[5]
@@ -215,100 +216,133 @@ def train(model, traindataloader, testdataloader, opts):
     train_loss_inception = []
     train_loss_Autoenc_recon = []
     train_loss_G_gan = []
+    train_fid = []
     
     for n in range(opts['nepochs']):
 
         for i, x in enumerate(traindataloader):
             # x is a tensor of shape (N, freq bins, timesteps)
-            
-            optimizer_GE.zero_grad()
-            optimizer_G.zero_grad()
-            optimizer_D1.zero_grad()
-            optimizer_D2.zero_grad()
-            optimizer_D3.zero_grad()
-            
+            #with torch.autograd.set_detect_anomaly(True): 
+
             if opts['cuda']:
                 x = x.cuda()
-                
-            # compute reconstruction
-            x_hat = model(x)
-            
+
+            ###### TRAIN DISCRIMINATOR 1 Fake vs Real ######
             # sample some fake trajectories
             z = model.prior_sample(opts['batch_size'], opts['max_length']//opts['imageW'],
                                    to_tensor=True)
+            # generate the spcetrograms
             x_samp = model.decode(z)
-            
+            # discriminator 1 output for real
+            y_hat_real_D1 = model.discriminate(x, model.disc_FvR)
+            # discriminator 1 output for fake
+            y_hat_fake_D1 = model.discriminate(x_samp, model.disc_FvR)
+            # gan loss for real data, discriminator needs to minimize this - E[log(D_fakevsreal(x)))]
+            loss2 = gan_loss(y_hat_real_D1, true_wp(d_prob, y_hat_real_D1.size(), device))
+            # discriminator 1 needs to minimize -E[ log(1 - D(G(z)))]
+            loss3 = gan_loss(y_hat_fake_D1, true_wp(1.-d_prob, y_hat_fake_D1.size(),device))
+            # update Discriminator 1 (fake vs real)
+            optimizer_D1.zero_grad()
+            loss_disc_FvR = loss2 + loss3
+            loss_disc_FvR.backward()
+            optimizer_D1.step()
+
+
+            ###### TRAIN DISCRIMINATOR 2 Reconstruction vs Real #####
+            # gan loss for reconstructed data, discriminator 2 needs to minimize this -E[ log(1-D(G(E(x)))) ]
+            # compute reconstruction
+            x_hat = model(x)
+            # discriminator 2 output for reconstruction
+            y_hat_recon_D2 = model.discriminate(x_hat, model.disc_RevR)
+            y_hat_real_D2 = model.discriminate(x, model.disc_RevR)
+            loss4 = gan_loss(y_hat_recon_D2, true_wp(1.-d_prob, y_hat_recon_D2.size(),device))
+            # discriminator 2 needs to minimize -E [ log(D_reconvsreal(x))]
+            loss5 = gan_loss(y_hat_real_D2, true_wp(d_prob, y_hat_real_D2.size(), device))
+            # update Discriminator 2 (reconstruction vs real)
+            optimizer_D2.zero_grad()
+            loss_disc_RevR = loss4 + loss5
+            loss_disc_RevR.backward()
+            optimizer_D2.step()
+
+
+            ###### TRAIN GENERATOR ONLY #####
+            # sample latent trajectory
+            z = model.prior_sample(opts['batch_size'], opts['max_length']//opts['imageW'],
+                                   to_tensor=True)
+            # generate the spcetrograms
+            x_samp = model.decode(z)
+            # discriminator 1 output for samples
+            y_hat_fake_G = model.discriminate(x_samp, model.disc_FvR)
+            optimizer_G.zero_grad()
+            loss6 = gan_loss(y_hat_fake_G, true_wp(1., y_hat_fake_G.size(),device))
+            # sampling gan loss just for decoder/generator
+            loss6.backward()
+            optimizer_G.step()
+
+
+            ###### TRAIN GENERATOR AND ENCODER TOGETHER #####
+            z = model.prior_sample(opts['batch_size'], opts['max_length']//opts['imageW'],
+                                   to_tensor=True)
+            # generate the spectrograms
+            x_samp = model.decode(z)
             # for cycle loss, encode back the sample
             z_hat = model.encode(x_samp)
-            
-            # discriminator 1 output for real
-            y_hat_real = model.discriminate(x.detach(), model.disc_FvR)
-            # discriminator 1 output for fake
-            y_hat_fake_D = model.discriminate(x_samp, model.disc_FvR)
-            # because generator is already in graph once, need to do this again
-            x_samp2 = model.decode(z.detach())
-            y_hat_fake_G = model.discriminate(x_samp2, model.disc_FvR)
-            
+            # for input reconstruction loss, compute reconstruction
+            x_hat = model(x)
+            # reconstruction error
+            loss0 = recon_func(x_hat, x) + recon_func(downsample_func(x_hat), downsample_func(x))
+            # cycle loss
+            loss1 = recon_func(z_hat, z)
             # discriminator 2 output for reconstruction
-            y_hat_recon = model.discriminate(x_hat.detach(), model.disc_RevR)
-            # again, for generator/encoder, combo need to run again
             y_hat_recon_G = model.discriminate(x_hat, model.disc_RevR)
-            
-            # discriminator 2 output for real
-            y_hat_real2 = model.discriminate(x.detach(), model.disc_RevR)
-            
-            # discriminator 3 (inception net)
-            # discriminator 3 output for rfake
-            y_hat_fake_incep = model.discriminate(x_samp.detach(), model.inception_net)
-            # discriminator 3 output for real
-            y_hat_real3 = model.discriminate(x.detach(), model.inception_net)
-            
-            loss = mdgan_loss(x, x_hat, x_samp, z_hat, z, y_hat_real, y_hat_real2, 
-                              y_hat_fake, y_hat_recon, y_hat_fake_G, y_hat_recon_G,
-                              recon_func, downsample_func, gan_loss, device, d_prob,
-                              y_hat_fake_incep, y_hat_real3)
-            
-            # train discriminators first
-            loss_disc_FvR = loss[2] + loss[3]
-            loss_disc_RevR = loss[4] + loss[5]
-            
-            loss_disc_FvR.backward()
-            loss_disc_RevR.backward()
-            
-            optimizer_D1.step()
-            optimizer_D2.step()
-            optimizer_D1.zero_grad()
-            optimizer_D2.zero_grad()
-            
-            # inception net
-            loss[8].backward()
-            optimizer_D3.step()
-            
-            # recon loss 
-            pdb.set_trace()
-            loss_autencoder = opts['lambda']*loss[0] + loss[1] + loss[7]
+            optimizer_GE.zero_grad()
+            loss7 = gan_loss(y_hat_recon_G, true_wp(1., y_hat_recon_G.size(),device))
+            loss_autencoder = opts['lambda']*loss0 + loss1 + loss7
             loss_autencoder.backward()
             optimizer_GE.step()
-            
-            # sampling gan loss just for decoder/generator
-            loss[6].backward()
-            optimizer_G.step()
-            
+
+
+
+            ##### TRAIN INCEPTION NET #####
+            # discriminator 3 output for fake
+            z = model.prior_sample(opts['batch_size'], opts['max_length']//opts['imageW'],
+                                   to_tensor=True)
+            # generate the spectrograms
+            x_samp = model.decode(z)
+            y_hat_fake_incep = model.discriminate(x_samp, model.inception_net)
+            # discriminator 3 output for real
+            y_hat_real_D3 = model.discriminate(x, model.inception_net)
+            # update discriminator 3
+            optimizer_D3.zero_grad()
+            loss8 = gan_loss(y_hat_real_D3, true_wp(1., y_hat_real_D3.size(), device))
+            loss8 += gan_loss(y_hat_fake_incep, true_wp(0., y_hat_fake_incep.size(), device))
+            # inception net
+            loss8.backward()
+            optimizer_D3.step()
+
+            # record loss values
             train_loss_D_FvR.append(loss_disc_FvR.item())
             train_loss_D_RevR.append(loss_disc_RevR.item())
-            train_loss_inception.append(loss[8].item())
-            
-            loss_recon = opts['lambda']*loss[0] + loss[1] 
+            train_loss_inception.append(loss8.item())
+
+            loss_recon = opts['lambda']*loss0 + loss1
             train_loss_Autoenc_recon.append(loss_recon.item())
-            train_loss_G_gan.append(loss[6].item())
+            train_loss_G_gan.append(loss6.item())
             
+            
+            # frechet inception distance
+            train_fid.append(model.frechet_inception_distance(x, x_hat, model.inception_net))
+            
+        
             if i%opts['log_every'] == 0:
                 print("..... Epoch %d, minibatch [%d/%d], D_FvR=%.2f, D_RevR=%.2f, Auto_enc=%.2f, G_gan=%.2f, incep=%.2f ....."%(n,i,N,
                                                                                                                     train_loss_D_FvR[-1],
                                                                                                                     train_loss_D_RevR[-1],
                                                                                                                     train_loss_Autoenc_recon[-1],
                                                                                                                     train_loss_G_gan[-1],
-                                                                                                                train_loss_inception[-1]))
+                                                                                                             train_loss_inception[-1]))
+                
+                print("..... Epoch %d, minibatch [%d/%d], frechet inception distance = %.3f ....."%(n, i, N, train_fid[-1]))
                 # save spectrograms (only first)
                 gagan_save_spect('%s/input_spect_epoch_%03d_batchnumb_%d.eps'
                                          % (opts['outf'], n, i), 

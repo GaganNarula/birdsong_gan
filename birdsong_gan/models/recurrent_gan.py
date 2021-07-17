@@ -254,12 +254,37 @@ class RecurrentGAN(nn.Module):
         # x has shape (N, L, rnn_in)
         # run encoder, get hidden state 
         _, h = model[1](x)
+        # map hidden to single
         h = h.permute(1,0,2)
-        # map hidden to single 
         h = h.view(x.size(0), h.size(1)*h.size(2))
+        
+        return model[2](h.squeeze())
+    
+    def frechet_inception_distance(self, x_real, x_hat, model):
+        """Get the deep representation from the inception net,
+            then calculate frechet inception distance
+        """
+        with torch.no_grad():
+            # real
+            x_real = self._chunk_and_convolve(x_real, model[0])
+            # x has shape (N, L, rnn_in)
+            # run encoder, get hidden state 
+            _, h_real = model[1](x_real)
+            h_real = h_real.permute(1,0,2)
+            # get flat vector 
+            h_real = h_real.view(x_real.size(0), h_real.size(1)*h_real.size(2))
 
-        return model[2](h)
-            
+            # fake vs real
+            x_hat = self._chunk_and_convolve(x_hat, model[0])
+            # x has shape (N, L, rnn_in)
+            # run encoder, get hidden state 
+            _, h_hat = model[1](x_hat)
+            h_hat = h_hat.permute(1,0,2)
+            # get flat vector
+            h_hat = h_hat.view(x_hat.size(0), h_hat.size(1)*h_hat.size(2))
+        
+        return FID(h_real, h_hat)
+        
     def encode(self, x):
         """Encode to latent variable
             x has shape (N, imageH, imageW)
@@ -302,6 +327,31 @@ class RecurrentGAN(nn.Module):
         
     
     
+from scipy.linalg import sqrtm
+
     
-    
+def FID(x_real, x_hat):
+    """Frechet inception distance
+        https://en.wikipedia.org/wiki/Fr%C3%A9chet_inception_distance
+        Heusel, Martin; Ramsauer, Hubert; Unterthiner, Thomas; Nessler, Bernhard; Hochreiter, Sepp (2017).
+        "GANs Trained by a Two Time-Scale Update Rule Converge to a Local Nash Equilibrium". 
+        Advances in Neural Information Processing Systems
+    """
+    if isinstance(x_real, torch.Tensor):
+        x_real = x_real.detach().cpu().numpy()
+    if isinstance(x_hat, torch.Tensor):
+        x_hat = x_hat.detach().cpu().numpy()
         
+    # get mean from each
+    mu_real = np.mean(x_real,axis=0)
+    mu_hat = np.mean(x_hat,axis=0)
+    
+    # covariance from each
+    cov_real = np.cov(x_real, rowvar=False)
+    cov_hat = np.cov(x_hat, rowvar=False)
+    
+    term1 = np.sum((mu_real - mu_hat)**2)
+    
+    term2 = np.trace(cov_real + cov_hat - 2*np.abs(sqrtm(cov_real @ cov_hat)))
+    
+    return term1 + term2
