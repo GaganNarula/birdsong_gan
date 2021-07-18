@@ -377,7 +377,7 @@ parser.add_argument('--test_path', required=True, help='path to test dataset id 
 parser.add_argument('--outf', required=True, help='folder to output images and model checkpoints')
 parser.add_argument('--path2hdf', default=EXT_PATH, help='path to folder containing bird hdf files')
 parser.add_argument('--batch_size', type=int, default=32)
-parser.add_argument('--max_length', type=int, default=400, help='maximum spectrogram length for rnn training')
+parser.add_argument('--max_length', type=int, default=256, help='maximum spectrogram length for rnn training')
 parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
 parser.add_argument('--beta1', type=float, default=0.5, help='momentume term 1 for Adam')
 parser.add_argument('--l2', type=float, default=0.0, help='weight_decay')

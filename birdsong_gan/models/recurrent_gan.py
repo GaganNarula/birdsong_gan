@@ -351,7 +351,7 @@ def FID(x_real, x_hat):
     cov_hat = np.cov(x_hat, rowvar=False)
     
     term1 = np.sum((mu_real - mu_hat)**2)
-    
+    # taking the absolute value here gets rid of the small imaginary part 
     term2 = np.trace(cov_real + cov_hat - 2*np.abs(sqrtm(cov_real @ cov_hat)))
     
     return term1 + term2
