@@ -333,8 +333,10 @@ def train(model, traindataloader, testdataloader, opts):
             
             
             # frechet inception distance
-            train_fid.append(model.frechet_inception_distance(x, x_hat, model.inception_net))
-            
+            if opts['compute_fid']:
+                train_fid.append(model.frechet_inception_distance(x, x_hat, model.inception_net))
+            else:
+                train_fid.append(-1.)
         
             if i%opts['log_every'] == 0:
                 print("..... Epoch %d, minibatch [%d/%d], D_FvR=%.2f, D_RevR=%.2f, Auto_enc=%.2f, G_gan=%.2f, incep=%.2f, fid=%.2f ....."%(n,i,N,
@@ -395,6 +397,7 @@ parser.add_argument('--dropout', type=float, default=0., help='dropout rate on r
 parser.add_argument('--leak', type=float, default=0.1, help='leak on leaky relu')
 parser.add_argument('--d_noise', type=float, default=0.1, help='noise on labels for discriminator')
 parser.add_argument('--ngf', type=int, default=64, help='filter multiplier constant')
+parser.add_argument('--compute_fid',action='store_true',help='whether to compute FID scores')
 parser.add_argument('--imageW', type=int, default=16, help='chunk length for spectrogram chunking')
 parser.add_argument('--hmm_components', type=int, default=20)
 parser.add_argument('--cuda', action='store_true')
