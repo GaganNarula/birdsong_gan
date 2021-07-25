@@ -334,7 +334,7 @@ class songbird_full_spectrogram_single_file(data.Dataset):
             self.id_list = pickle.load(f)
             
         self.max_length = max_length
-        self.birdfile = h5py.File(path2hdf)
+        self.birdfile = h5py.File(path2hdf,'r')
         
     def __len__(self):
         # total number of samples
