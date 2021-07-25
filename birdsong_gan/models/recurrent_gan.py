@@ -171,10 +171,13 @@ class RecurrentGAN(nn.Module):
         bid = 2 if bidirectional else 1
         
         # define encoder
+        attn = nn.TransformerEncoderLayer(d_model=rnn_input_dim, nhead=10, dim_feedforward=100)
         self.encoder = nn.ModuleList([make_downsampling_cnn(rnn_input_dim, ngf, spec_norm=False),
-                        nn.GRU(rnn_input_dim, nrnn, nlayers, bidirectional=bidirectional, 
-                               dropout=dropout, batch_first=True),
-                        make_mlp(nrnn*bid, nlin, nz, leak)
+                        #nn.GRU(rnn_input_dim, nrnn, nlayers, bidirectional=bidirectional, 
+                        #       dropout=dropout, batch_first=True),
+                        #torch.nn.TransformerEncoderLayer(d_model=rnn_input_dim, nhead=10, dim_feedforward=100),
+                        nn.TransformerEncoder(attn, num_layers=2),
+                                      nn.Linear(rnn_input_dim, nz)
                        ])
         # generator
         self.decoder = make_upsampling_cnn(nz, ngf, spectral_norm_decoder)
@@ -290,8 +293,8 @@ class RecurrentGAN(nn.Module):
             x has shape (N, imageH, imageW)
         """
         x = self._chunk_and_convolve(x, self.encoder[0])
-        # run rnn   
-        o,_ = self.encoder[1](x)
+        # run rnn / or other method   
+        o = self.encoder[1](x)
         # map each step to latent
         z = []
         for t in range(o.size(1)):
@@ -352,6 +355,8 @@ def FID(x_real, x_hat):
     
     term1 = np.sum((mu_real - mu_hat)**2)
     # taking the absolute value here gets rid of the small imaginary part 
-    term2 = np.trace(cov_real + cov_hat - 2*np.abs(sqrtm(cov_real @ cov_hat)))
-    
+    try:
+        term2 = np.trace(cov_real + cov_hat - 2*np.abs(sqrtm(cov_real @ cov_hat)))
+    except:
+        term2 = np.nan
     return term1 + term2

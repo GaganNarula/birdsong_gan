@@ -15,9 +15,9 @@ from datetime import datetime
 import random
 import joblib
 import pdb
-import torch.backends.cudnn as cudnn
-cudnn.deterministic = True
-cudnn.benchmark = True
+#import torch.backends.cudnn as cudnn
+#cudnn.deterministic = True
+#cudnn.benchmark = True
 
 
 
@@ -223,10 +223,11 @@ def train(model, traindataloader, testdataloader, opts):
         for i, x in enumerate(traindataloader):
             # x is a tensor of shape (N, freq bins, timesteps)
             #with torch.autograd.set_detect_anomaly(True): 
-
+            
             if opts['cuda']:
                 x = x.cuda()
-
+            
+                
             ###### TRAIN DISCRIMINATOR 1 Fake vs Real ######
             # sample some fake trajectories
             z = model.prior_sample(opts['batch_size'], opts['max_length']//opts['imageW'],
@@ -297,8 +298,8 @@ def train(model, traindataloader, testdataloader, opts):
             y_hat_recon_G = model.discriminate(x_hat, model.disc_RevR)
             optimizer_GE.zero_grad()
             loss7 = gan_loss(y_hat_recon_G, true_wp(1., y_hat_recon_G.size(),device))
-            loss_autencoder = opts['lambda']*loss0 + loss1 + loss7
-            loss_autencoder.backward()
+            loss_autoencoder = opts['lambda']*loss0 + loss1 + loss7
+            loss_autoencoder.backward()
             optimizer_GE.step()
 
 
@@ -319,7 +320,8 @@ def train(model, traindataloader, testdataloader, opts):
             # inception net
             loss8.backward()
             optimizer_D3.step()
-
+            
+                
             # record loss values
             train_loss_D_FvR.append(loss_disc_FvR.item())
             train_loss_D_RevR.append(loss_disc_RevR.item())
@@ -335,14 +337,14 @@ def train(model, traindataloader, testdataloader, opts):
             
         
             if i%opts['log_every'] == 0:
-                print("..... Epoch %d, minibatch [%d/%d], D_FvR=%.2f, D_RevR=%.2f, Auto_enc=%.2f, G_gan=%.2f, incep=%.2f ....."%(n,i,N,
+                print("..... Epoch %d, minibatch [%d/%d], D_FvR=%.2f, D_RevR=%.2f, Auto_enc=%.2f, G_gan=%.2f, incep=%.2f, fid=%.2f ....."%(n,i,N,
                                                                                                                     train_loss_D_FvR[-1],
                                                                                                                     train_loss_D_RevR[-1],
                                                                                                                     train_loss_Autoenc_recon[-1],
                                                                                                                     train_loss_G_gan[-1],
-                                                                                                             train_loss_inception[-1]))
-                
-                print("..... Epoch %d, minibatch [%d/%d], frechet inception distance = %.3f ....."%(n, i, N, train_fid[-1]))
+                                                                                                             train_loss_inception[-1],
+                                                                                                                    train_fid[-1]))
+
                 # save spectrograms (only first)
                 gagan_save_spect('%s/input_spect_epoch_%03d_batchnumb_%d.eps'
                                          % (opts['outf'], n, i), 
