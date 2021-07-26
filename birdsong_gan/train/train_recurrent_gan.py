@@ -359,8 +359,7 @@ def train(model, traindataloader, testdataloader, opts):
                 
                 
         # model checkpoint
-        if opts['checkpoint_models']:
-            torch.save(model.state_dict(), '%s/rec_gan_epoch_%d.pth' % (opts['outf'], n))
+        torch.save(model.state_dict(), '%s/rec_gan_epoch_%d.pth' % (opts['outf'], n))
         
         # evaluate on test / validation set
         val_loss = evaluate(model, testdataloader, recon_func, downsample_func, gan_loss, opts)
