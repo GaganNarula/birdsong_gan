@@ -378,6 +378,7 @@ parser.add_argument('--training_path', required=True, help='path to training dat
 parser.add_argument('--test_path', required=True, help='path to test dataset id list')
 parser.add_argument('--outf', required=True, help='folder to output images and model checkpoints')
 parser.add_argument('--path2hdf', default=EXT_PATH, help='path to folder containing bird hdf files')
+parser.add_argument('--path2trainedmodel', default='', help='to retrain a previous model')
 parser.add_argument('--batch_size', type=int, default=32)
 parser.add_argument('--max_length', type=int, default=256, help='maximum spectrogram length for rnn training')
 parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
@@ -452,6 +453,13 @@ def main():
                          spectral_norm_decoder=opts['spectral_norm_decoder'],
                          spectral_norm_discriminator=opts['spectral_norm_discriminator'])
     
+        
+    if len(opts['path2trainedmodel'])>0:
+        model.load_state_dict(torch.load(opts['path2trainedmodel']))
+    
+    if opts['cuda']:
+        model = model.cuda() 
+        
     # train model
     model, train_loss, test_loss = train(model, train_dataloader, test_dataloader, opts)
     

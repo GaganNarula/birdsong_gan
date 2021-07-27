@@ -166,7 +166,7 @@ class RecurrentGAN(nn.Module):
         super(RecurrentGAN, self).__init__()
         
         self.imageW = imageW
-        self.cuda = cuda
+        self.cudaa = cuda
         self.nz = nz
         bid = 2 if bidirectional else 1
         
@@ -205,8 +205,8 @@ class RecurrentGAN(nn.Module):
         self._init_hmm(hmm_components)
         self.sigmoid = nn.Sigmoid()
         
-        if cuda:
-            self._models_to_gpu()
+        #if cuda:
+        #    self._models_to_gpu()
             
     def _models_to_gpu(self):
         self.encoder = self.encoder.cuda()
@@ -324,7 +324,7 @@ class RecurrentGAN(nn.Module):
         z = np.stack([self.hmm.sample(T)[0] for _ in range(nsamples)])
         if to_tensor:
             z = torch.from_numpy(z).float()
-            if self.cuda:
+            if self.cudaa:
                 z = z.cuda()
         return z
         
