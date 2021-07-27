@@ -108,8 +108,7 @@ def mdgan_loss(x, x_hat, x_samp, z_hat, z, y_hat_real, y_hat_real2, y_hat_fake, 
 
 
 
-def evaluate(model, testdataloader, costfunc, downsample_func, 
-             gan_loss, device, d_prob, opts):
+def evaluate(model, testdataloader, costfunc, downsample_func, gan_loss, device, d_prob, opts):
     """Evaluate model on test dataset """
     test_loss_D_FvR = []
     test_loss_D_RevR = []
@@ -362,7 +361,7 @@ def train(model, traindataloader, testdataloader, opts):
         torch.save(model.state_dict(), '%s/rec_gan_epoch_%d.pth' % (opts['outf'], n))
         
         # evaluate on test / validation set
-        val_loss = evaluate(model, testdataloader, recon_func, downsample_func, gan_loss, opts)
+        val_loss = evaluate(model, testdataloader, recon_func, downsample_func, gan_loss, device, d_prob, opts)
         print("..... Epoch %d, D_FvR=%.2f, D_RevR=%.2f, Auto_enc=%.2f, G_gan=%.2f ....."%(n, np.mean(val_loss[0]),
                                                                                             np.mean(val_loss[1]),
                                                                                           np.mean(val_loss[2]),
