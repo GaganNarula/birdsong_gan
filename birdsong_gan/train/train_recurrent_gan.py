@@ -219,7 +219,9 @@ def train(model, traindataloader, testdataloader, opts):
     train_fid = []
     
     for n in range(opts['nepochs']):
-
+        
+        model.train()
+        
         for i, x in enumerate(traindataloader):
             # x is a tensor of shape (N, freq bins, timesteps)
             #with torch.autograd.set_detect_anomaly(True): 
@@ -361,7 +363,8 @@ def train(model, traindataloader, testdataloader, opts):
         # model checkpoint
         torch.save(model.state_dict(), '%s/rec_gan_epoch_%d.pth' % (opts['outf'], n))
         
-        # evaluate on test / validation set
+        # evaluate on test / validation set after each epoch
+        model.eval()
         val_loss = evaluate(model, testdataloader, recon_func, downsample_func, gan_loss, device, d_prob, opts)
         print("..... Epoch %d, D_FvR=%.2f, D_RevR=%.2f, Auto_enc=%.2f, G_gan=%.2f ....."%(n, np.mean(val_loss[0]),
                                                                                             np.mean(val_loss[1]),
