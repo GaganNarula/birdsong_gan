@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from data.dataset import songbird_full_spectrogram_single_file
-from models.recurrent_gan import RecurrentGAN
+from models.recurrent_gan import RecurrentAttentionGAN, RecurrentRNNGAN
 from collections import namedtuple
 import argparse
 import itertools
@@ -380,6 +380,7 @@ parser.add_argument('--test_path', required=True, help='path to test dataset id 
 parser.add_argument('--outf', required=True, help='folder to output images and model checkpoints')
 parser.add_argument('--path2hdf', default=EXT_PATH, help='path to folder containing bird hdf files')
 parser.add_argument('--path2trainedmodel', default='', help='to retrain a previous model')
+parser.add_argument('--gan_type', type=str, default='attention', help='type of recurrent function, either attention or rnn')
 parser.add_argument('--batch_size', type=int, default=32)
 parser.add_argument('--max_length', type=int, default=256, help='maximum spectrogram length for rnn training')
 parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
@@ -446,6 +447,12 @@ def main():
     test_dataloader = DataLoader(test_dataset, batch_size= opts['batch_size'],
                                              shuffle=True, num_workers=opts['workers'],
                                                     drop_last = True)
+    
+    if opts['gan_type'] == 'attention':
+        RecurrentGAN = RecurrentAttentionGAN
+    elif opts['gan_type'] == 'rnn':
+        RecurrentGAN = RecurrentRNNGAN
+        
     # initiate model
     model = RecurrentGAN(rnn_input_dim=opts['rnn_input_dim'], nz=opts['nz'], nrnn=opts['nrnn'],
                          nlin=opts['nlin'], nlayers=opts['nlayers'], bidirectional=opts['bidirectional'], 
@@ -467,6 +474,10 @@ def main():
     joblib({'model': model, 'train_loss': train_loss, 'test_loss':test_loss, 
            }, os.path.join(opts['outf'], 'model_and_losses.pkl'))
     
-main()
+    
+    
+if __name__ == '__main__':
+    
+    main()
     
     

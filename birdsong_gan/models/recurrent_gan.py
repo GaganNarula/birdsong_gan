@@ -156,14 +156,14 @@ def makeLRtransmat(self, K):
 
 
     
-class RecurrentGAN(nn.Module):
+class RecurrentAttentionGAN(nn.Module):
     """This is a GAN model that uses a recurrent network in the encoder and discriminator.
     
     """
     def __init__(self, rnn_input_dim=50, nz=16, nrnn=200, nlin=200, nlayers=1, bidirectional=False, 
                  dropout=0.1, leak=0.1, ngf=64, imageW=16, hmm_components=20, 
                 cuda=True, spectral_norm_decoder=False, spectral_norm_discriminator=False):
-        super(RecurrentGAN, self).__init__()
+        super(RecurrentAttentionGAN, self).__init__()
         
         self.imageW = imageW
         self.cudaa = cuda
@@ -328,6 +328,176 @@ class RecurrentGAN(nn.Module):
                 z = z.cuda()
         return z
         
+    
+    
+    
+class RecurrentRNNGAN(nn.Module):
+    """This is a GAN model that uses a recurrent network in the encoder and discriminator.
+    
+    """
+    def __init__(self, rnn_input_dim=50, nz=16, nrnn=200, nlin=200, nlayers=1, bidirectional=False, 
+                 dropout=0.1, leak=0.1, ngf=64, imageW=16, hmm_components=20, 
+                cuda=True, spectral_norm_decoder=False, spectral_norm_discriminator=False):
+        super(RecurrentRNNGAN, self).__init__()
+        
+        self.imageW = imageW
+        self.cudaa = cuda
+        self.nz = nz
+        bid = 2 if bidirectional else 1
+        
+        # define encoder
+        self.encoder = nn.ModuleList([make_downsampling_cnn(rnn_input_dim, ngf, spec_norm=False),
+                        nn.GRU(rnn_input_dim, nrnn, nlayers, bidirectional=bidirectional, 
+                               dropout=dropout, batch_first=True),
+                        nn.Linear(nrnn*bid, nz)
+                       ])
+        # generator
+        self.decoder = make_upsampling_cnn(nz, ngf, spectral_norm_decoder)
+        
+        # discriminator fake vs real
+        self.disc_FvR = nn.ModuleList([make_downsampling_cnn(rnn_input_dim, ngf, spectral_norm_discriminator), 
+                         nn.GRU(rnn_input_dim, nrnn, nlayers, bidirectional=bidirectional, 
+                                dropout=dropout, batch_first=True),
+                         make_mlp(nrnn*bid*nlayers, nlin, 1, leak)
+                        ])
+        # discriminator reconstruction vs real
+        self.disc_RevR = nn.ModuleList([make_downsampling_cnn(rnn_input_dim, ngf, spectral_norm_discriminator), 
+                         nn.GRU(rnn_input_dim, nrnn, nlayers, bidirectional=bidirectional, 
+                                dropout=dropout, batch_first=True),
+                         make_mlp(nrnn*bid*nlayers, nlin, 1, leak)
+                         ])
+        # this network is used to compute Frechet Inception Distance
+        self.inception_net = nn.ModuleList([make_downsampling_cnn(rnn_input_dim, ngf, spectral_norm_discriminator), 
+                         nn.GRU(rnn_input_dim, nrnn, nlayers, bidirectional=bidirectional, 
+                                dropout=dropout, batch_first=True),
+                         make_mlp(nrnn*bid*nlayers, nlin, 1, leak)
+                         ])
+        
+        # sampling via hmm
+        self._init_hmm(hmm_components)
+        self.sigmoid = nn.Sigmoid()
+        
+        #if cuda:
+        #    self._models_to_gpu()
+            
+    def _models_to_gpu(self):
+        self.encoder = self.encoder.cuda()
+        self.decoder = self.decoder.cuda()
+        self.disc_FvR = self.disc_FvR.cuda()
+        self.disc_RevR = self.disc_RevR.cuda()
+        self.inception_net = self.inception_net.cuda()
+        
+    def _init_hmm(self, n_components, transmat_prior=1.):
+        self.hmm = GaussianHMM(n_components, covariance_type='diag',
+                                       transmat_prior=transmat_prior, 
+                                        init_params = 'mc')
+        #intialize randomly
+        self.hmm.transmat_ = np.random.dirichlet(transmat_prior*np.ones(n_components),
+                                                 size = n_components)
+        # or initialize as Left right transmat
+        #self.hmm.transmat_ = makeLRtransmat(n_components)
+        self.hmm.startprob_ = np.random.dirichlet(transmat_prior * np.ones(n_components))
+        
+        fake_init_data = np.random.multivariate_normal(mean= np.zeros(self.nz),
+                                                       cov=np.eye(self.nz), 
+                                                       size = 1000)
+        self.hmm._init(fake_init_data)
+        
+    def _chunk_and_convolve(self, x, model):
+        """Split spectrogram into a series of chunks, convolve
+            each and stack into shape (N, L, C)
+        """
+        h = []
+        i = 0
+        notdone=True
+        while notdone:
+            s = x[:,:,i:i+self.imageW].view(-1,1,x.shape[1],self.imageW)
+            s = model(s).squeeze()
+            # s has shape (N, rnn_in)
+            h.append(s)
+            i += self.imageW
+            if i + self.imageW > x.shape[-1]:
+                notdone=False
+    
+        return torch.stack(h, dim=1)
+    
+    def discriminate(self, x, model):
+        """Convolutions -> downsampling -> RNN -> label
+        """
+        # fake vs real
+        x = self._chunk_and_convolve(x, model[0])
+        # x has shape (N, L, rnn_in)
+        # run encoder, get hidden state 
+        _, h = model[1](x)
+        # map hidden to single
+        h = h.permute(1,0,2)
+        h = h.view(x.size(0), h.size(1)*h.size(2))
+        
+        return model[2](h.squeeze())
+    
+    def frechet_inception_distance(self, x_real, x_hat, model):
+        """Get the deep representation from the inception net,
+            then calculate frechet inception distance
+        """
+        with torch.no_grad():
+            # real
+            x_real = self._chunk_and_convolve(x_real, model[0])
+            # x has shape (N, L, rnn_in)
+            # run encoder, get hidden state 
+            _, h_real = model[1](x_real)
+            h_real = h_real.permute(1,0,2)
+            # get flat vector 
+            h_real = h_real.view(x_real.size(0), h_real.size(1)*h_real.size(2))
+
+            # fake vs real
+            x_hat = self._chunk_and_convolve(x_hat, model[0])
+            # x has shape (N, L, rnn_in)
+            # run encoder, get hidden state 
+            _, h_hat = model[1](x_hat)
+            h_hat = h_hat.permute(1,0,2)
+            # get flat vector
+            h_hat = h_hat.view(x_hat.size(0), h_hat.size(1)*h_hat.size(2))
+        
+        return FID(h_real, h_hat)
+        
+    def encode(self, x):
+        """Encode to latent variable
+            x has shape (N, imageH, imageW)
+        """
+        x = self._chunk_and_convolve(x, self.encoder[0])
+        # run rnn   
+        o, _ = self.encoder[1](x)
+        # map each step to latent with a linear map
+        z = self.encoder[2](o)
+            
+        return z
+        
+    def decode(self, z):
+        """ Here, z is a trajectory in latent space
+            Decodes chunks for every z
+            Shape of z = (N, L, nz)
+        """
+        x_hat = []
+        N = z.size(0) # batch size
+        for t in range(z.size(1)):
+            z_in = z[:,t,:].view(N, z.size(2), 1, 1)
+            x_hat.append(self.decoder(z_in).squeeze())
+            
+        return torch.cat(x_hat,dim=-1)
+        
+    def forward(self, x):
+        """forward call is a reconstruction"""
+        return self.decode(self.encode(x))
+    
+    def prior_sample(self, nsamples=1, T=100, to_tensor=False):
+        """Gaussian HMM samples"""
+        z = np.stack([self.hmm.sample(T)[0] for _ in range(nsamples)])
+        if to_tensor:
+            z = torch.from_numpy(z).float()
+            if self.cudaa:
+                z = z.cuda()
+        return z
+    
     
     
 from scipy.linalg import sqrtm
