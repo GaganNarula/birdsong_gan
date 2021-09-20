@@ -362,6 +362,45 @@ class songbird_full_spectrogram_single_file(data.Dataset):
     
     
     
+    
+class songbird_spectrogram_chunks_single_file(data.Dataset):
+    """This dataset retreives full spectrograms
+        Useful for recurrent network training.
+        
+        __getitem__() method is used by pytorch to
+        retrieve a single sample from the dataset.
+    """
+    def __init__(self, path2idlist, path2hdf, imageW=16):
+        
+        with open(path2idlist, 'rb') as f:
+            self.id_list = pickle.load(f)
+            
+        self.max_length = max_length
+        self.birdfile = h5py.File(path2hdf,'r')
+        self.imageW = imageW
+        
+    def __len__(self):
+        # total number of samples
+        return len(self.id_list)
+    
+    def __getitem__(self, index):
+        # load one wav file and get a sample chunk from it
+        ID = self.id_list[index]
+        # this 'ID' is a dictionary containing several fields,
+        # use field 'within_file' to get data
+        x = np.array(self.birdfile.get(ID['within_file']))
+        
+        x = sepf.transform(x)
+        
+        return torch.from_numpy(x).float(), None # none is for the age weight
+    
+    def crop_and_transform(self, X):
+        X = random_crop(X, width=self.imageW)
+        X = transform(X)
+        return X
+    
+    
+    
 class bird_dataset(object):
     ''' Main dataset class for loading, transforming spectrograms 
         from a single bird. No data.Dataset subclass. This class is

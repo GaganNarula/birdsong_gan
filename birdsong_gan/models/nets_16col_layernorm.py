@@ -139,6 +139,55 @@ class _netD(nn.Module):
 
     
 
+class InceptionNet(nn.Module):
+    def __init__(self, ndf, nc):
+        super(InceptionNet, self).__init__()
+        self.convs = nn.ModuleList([
+            nn.Conv2d(nc, ndf, kernel_size=4, stride=(2,2), padding=(1,1), bias=False),
+            # size H = (129 +2 -4)/2 + 1 = 64, W = (16 +2 -4)/2 + 1 = 8
+            nn.Conv2d(ndf, ndf * 2, kernel_size=(4, 3), stride=(2, 1), padding=(1, 0), bias=False),
+            # size H = (64 +2 -4)/2 + 1 = 32, W = (8 -3) + 1 = 6
+            nn.Conv2d(ndf * 2, ndf * 4, kernel_size=(4,3), stride=(2,1), padding=(2,0), bias=False),
+            # size H = (32 +4 -4)/2 + 1 = 17, W = (6 -3) + 1 = 4
+            nn.Conv2d(ndf * 4, ndf * 8, kernel_size=(8,4), stride=(2,1), padding=1, bias=False),
+            # H = (17 +2 -8)/2 + 1 = 6, W = (4 +2 -4) + 1 = 3
+            nn.Conv2d(ndf * 8, 1, kernel_size=(6,3), stride=1, padding=0, bias=False),
+            # H = 6-6 + 1 =1, W = (4 - 3) +1 =  
+        ])
+        self.lns = nn.ModuleList([nn.LayerNorm([ndf, 64, 8]),
+                                  nn.LayerNorm([ndf * 2, 32, 6]),
+                                  nn.LayerNorm([ndf * 4, 17, 4]),
+                                  nn.LayerNorm([ndf * 8, 6, 3])])
+        self.activations = nn.ModuleList([nn.LeakyReLU(0.2),nn.LeakyReLU(0.2),
+                                    nn.LeakyReLU(0.2),nn.LeakyReLU(0.2)])
+
+    def get_middle_layer(self, x):
+        for i in range(4):
+            x = self.convs[i](x)
+            x = self.lns[i](x)
+            x = self.activations[i](x)
+        return x
+    
+    def fid_score(self, x_real, x_gen):
+        x_real = self.get_middle_layer(x_real)
+        # flatten its last dimensions
+        x_real = x_real.view(-1, x_real.size(1)*x_real.size(2)*x_real.size(3))
+        
+        x_gen = self.get_middle_layer(x_real)
+        # flatten its last dimensions
+        x_gen = x_gen.view(-1, x_real.size(1)*x_real.size(2)*x_real.size(3))
+        
+        return FID(x_real, x_gen)
+    
+    def forward(self, x):
+        x = self.get_middle_layer(x)
+        x = self.convs[-1](x)
+        x = nn.Sigmoid()(x)
+        output = x.view(-1,1)
+        return output
+    
+    
+    
 class GANLoss_orig(nn.Module):
     def __init__(self, use_lsgan=True, target_real_label=1.0, target_fake_label=0.0,
                  tensor=torch.FloatTensor):

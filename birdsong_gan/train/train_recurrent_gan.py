@@ -11,6 +11,7 @@ from models.recurrent_gan import RecurrentAttentionGAN, RecurrentRNNGAN
 from collections import namedtuple
 import argparse
 import itertools
+import shutil
 from utils.utils import rescale_spectrogram, gagan_save_spect
 from datetime import datetime
 import random
