@@ -340,6 +340,10 @@ class songbird_full_spectrogram_single_file(data.Dataset):
         # total number of samples
         return len(self.id_list)
     
+    def get_random_item(self):
+        idx = np.random.choice(len(self.id_list),size=1)
+        return self.__getitem__(idx)
+        
     def __getitem__(self, index):
         # load one wav file and get a sample chunk from it
         ID = self.id_list[index]
@@ -375,8 +379,7 @@ class songbird_spectrogram_chunks_single_file(data.Dataset):
         with open(path2idlist, 'rb') as f:
             self.id_list = pickle.load(f)
             
-        self.max_length = max_length
-        self.birdfile = h5py.File(path2hdf,'r')
+        self.birdfile = path2hdf
         self.imageW = imageW
         
     def __len__(self):
@@ -384,15 +387,16 @@ class songbird_spectrogram_chunks_single_file(data.Dataset):
         return len(self.id_list)
     
     def __getitem__(self, index):
-        # load one wav file and get a sample chunk from it
-        ID = self.id_list[index]
-        # this 'ID' is a dictionary containing several fields,
-        # use field 'within_file' to get data
-        x = np.array(self.birdfile.get(ID['within_file']))
+        with h5py.File(self.birdfile, 'r') as file:
+            # load one wav file and get a sample chunk from it
+            ID = self.id_list[index]
+            # this 'ID' is a dictionary containing several fields,
+            # use field 'within_file' to get data
+            x = np.array(file.get(ID['within_file']))
         
-        x = sepf.transform(x)
-        
-        return torch.from_numpy(x).float(), None # none is for the age weight
+        x = self.crop_and_transform(x)
+        age = torch.zeros(1) 
+        return torch.from_numpy(x).float(), age # none is for the age weight
     
     def crop_and_transform(self, X):
         X = random_crop(X, width=self.imageW)
@@ -436,11 +440,12 @@ class bird_dataset(object):
         print('... total available files = %d ...' %(len(nfiles)))
         return nfiles, day
     
-    def get(self, day=0, nsamps=1):
+    def get(self, day=0, nsamps=-1):
         ''' get "nsamps" spectrograms from day number "day" ''' 
         nfiles,day = self.get_file_names(day)
         # choose nsamp random files
         if nsamps == -1:
+            # get all songs
             idx = np.arange(len(nfiles))
         else:
             idx = np.random.choice(len(nfiles), size = nsamps, replace=False)
@@ -449,6 +454,25 @@ class bird_dataset(object):
             X[k] = transform(np.array(self.file.get(day + '/' + nfiles[i])))
         return X
     
+    def make_chunk_tensor_dataset(self, day=0, nsamps=-1, imageW=16, shuffle_chunks=True):
+        # get a list of all the spectrograms
+        seqs = self.get(day, nsamps)
+        
+        X = [] # list of all the chunks 
+        for seq in seqs:
+            L = seq.shape[1] # length of time
+            idx = 0
+            while idx + imageW <= L:
+                X.append(seq[:, idx : idx+imageW])
+        # stack
+        X = np.stack(X)
+        
+        if shuffle_chunks:
+            np.random.shuffle(X)
+            
+        # output a tensor dataset instance and the age of the day as a tensor
+        return data.TensorDataset(torch.from_numpy(X).float()), torch.FloatTensor([day])
+            
     def close(self):
         self.file.close()
         

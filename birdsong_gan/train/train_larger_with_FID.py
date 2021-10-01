@@ -50,7 +50,7 @@ parser.add_argument('--niter', type=int, default=50, help='number of epochs to t
 parser.add_argument('--lr', type=float, default = 0.00001, help='learning rate')
 parser.add_argument('--mds_loss',action='store_true', help='multidimensional scaling type loss')
 parser.add_argument('--z_reg', action="store_true", help='whether to regularize the posterior')
-parser.add_argument('--zreg_weight', type = float, default =  1, help = 'weight for z regularization')
+parser.add_argument('--zreg_weight', type = float, default = 1., help = 'weight for z regularization')
 parser.add_argument('--z_var', type = float, default = 1., help = 'variance of latent prior')
 parser.add_argument('--manualSeed', type=int, default=-1, help='random number generator seed')
 parser.add_argument('--schedule_lr', action = 'store_true', help='change learning rate')
@@ -178,17 +178,17 @@ if __name__ == '__main__':
                                                             opts_dict['imageW'])
     
     train_dataloader = DataLoader(train_dataset, batch_size=opts_dict['batchSize'], sampler = None,
-                                             shuffle=shuffle_, num_workers=int(opts_dict['workers']),
+                                             shuffle=True, num_workers=int(opts_dict['workers']),
                                         drop_last = True)
     
-    test_dataset = songbird_dataset(args.test_path, args.external_file_path,
+    test_dataset = songbird_spectrogram_chunks_single_file(args.test_path, args.external_file_path,
                                     opts_dict['imageW'])
     
     test_dataloader = DataLoader(test_dataset, batch_size= opts_dict['batchSize'],
-                                shuffle=True, num_workers=int(opts_dict['workers']),
+                                shuffle=False, num_workers=int(opts_dict['workers']),
                                 drop_last = True)
     # for example outputs
-    sample_dataset = songbird_random_sample(args.training_path, args.external_file_path)
+    sample_dataset = songbird_full_spectrogram_single_file(args.training_path, args.external_file_path)
     
     
     ### make models ###
@@ -262,11 +262,12 @@ if __name__ == '__main__':
     
     # optional learning rate scheduler
     if opts_dict['schedule_lr']:
-        lambda1 = lambda epoch: (epoch+1) / 2
+        lambda1 = lambda epoch: epoch**0.95
         schedulerG = optim.lr_scheduler.LambdaLR(optimizerG, lr_lambda = lambda1)
         schedulerD1 = optim.lr_scheduler.LambdaLR(optimizerD1, lr_lambda = lambda1)
         schedulerD2 = optim.lr_scheduler.LambdaLR(optimizerD2, lr_lambda = lambda1)
-    
+        schedulerD3 = optim.lr_scheduler.LambdaLR(optimizerD3, lr_lambda = lambda1)
+        
     #losses
     minibatchLossD1 = []
     minibatchLossG1_rec = []
@@ -405,9 +406,9 @@ if __name__ == '__main__':
             err_real_d3 = criterion_gan(pred_real_d3, true_wp(d_prob, pred_real_d3.size(),device))
             err_fake_d3 = criterion_gan(pred_fake_d3, true_wp(1.-d_prob, pred_fake_d3.size(), device))
             inception_loss = err_real_d3 + err_fake_d3
-            optimizer_D3.zero_grad()
+            optimizerD3.zero_grad()
             inception_loss.backward()
-            optimizer_D3.step()
+            optimizerD3.step()
             
             # compute fid score
             with torch.no_grad():
@@ -481,8 +482,7 @@ if __name__ == '__main__':
 
 
                     # randomly sample a file and save audio sample
-                    sample = sample_dataset.get(nsamps=1)[0] # first element of list output 
-                    sample = sample[0]
+                    sample = sample_dataset.get_random_item()[0] # first element of list output 
                     
                     # audio
                     if opts_dict['get_audio']:
@@ -498,7 +498,7 @@ if __name__ == '__main__':
                                          % (opts_dict['outf'], epoch, i), 
                                          rescale_spectrogram(transform(sample)))
                     # save reconstruction
-                    zvec = overlap_encode(sample, netE, transform_sample = True, imageW = opts_dict['imageW'],
+                    zvec = overlap_encode(sample, netE, transform_sample = False, imageW = opts_dict['imageW'],
                                            noverlap = opts_dict['noverlap'], cuda = opts_dict['cuda'])
                     spect, audio = overlap_decode(zvec, netG, noverlap = opts_dict['noverlap'], get_audio = opts_dict['get_audio'], 
                                                   cuda = opts_dict['cuda'])
@@ -514,25 +514,24 @@ if __name__ == '__main__':
                             print('..audio buffer error, skipped audio file generation')
 
                     
-
-                    # document losses 
-                    losspath = os.path.join(opts_dict['outf'], 'losses/')
-                    np.save(losspath+'D1',np.array(minibatchLossD1))
-                    np.save(losspath+'D2',np.array(minibatchLossD2))
-                    np.save(losspath+'G1rec',np.array(minibatchLossG1_rec))
-                    np.save(losspath+'G1gan',np.array(minibatchLossG1_gan))
-                    np.save(losspath+'G2',np.array(minibatchLossG2))
-                    np.save(losspath+'D3',np.array(minibatchLossD3))
-                    np.save(losspath+'FID',np.array(FID))
+        
+        # document losses at end of epoch
+        losspath = os.path.join(opts_dict['outf'], 'losses/')
+        np.save(losspath+'D1',np.array(minibatchLossD1))
+        np.save(losspath+'D2',np.array(minibatchLossD2))
+        np.save(losspath+'G1rec',np.array(minibatchLossG1_rec))
+        np.save(losspath+'G1gan',np.array(minibatchLossG1_gan))
+        np.save(losspath+'G2',np.array(minibatchLossG2))
+        np.save(losspath+'D3',np.array(minibatchLossD3))
+        np.save(losspath+'FID',np.array(FID))
                 
-                #netG.train()
-                #netE.train()
-            # if schedule for learning rate, update lr
-            if args.schedule_lr:
-                schedulerG.step()
-                schedulerD1.step()
-                schedulerD2.step()
-                             
+                
+        # if schedule for learning rate, update lr after epoch 
+        if args.schedule_lr:
+            schedulerG.step()
+            schedulerD1.step()
+            schedulerD2.step()
+            schedulerD3.step()                 
                 
         # do checkpointing of models
         torch.save(netG.state_dict(), '%s/netG_epoch_%d.pth' % (opts_dict['outf'], epoch))
@@ -564,8 +563,12 @@ if __name__ == '__main__':
         
         netG.eval()
         netE.eval()
+        netD2.eval()
+        
         with torch.no_grad():
+            
             for k,(data,age) in enumerate(test_dataloader):
+                
                 data = data.view(data.size(0),nc,data.size(1),data.size(2)).to(device)
                 # map X -> Z
                 encoding = netE(data)
@@ -577,6 +580,7 @@ if __name__ == '__main__':
                 # generate fake image
                 noise.normal_(0.,opts_dict['z_var'])
                 fake = netG(noise)
+                
                 # classify it with D3
                 pred_fake_d2 = netD2(fake)
                 labell = torch.FloatTensor(opts_dict['batchSize'],1).fill_(1.) # true label
@@ -596,7 +600,11 @@ if __name__ == '__main__':
                                                                                       per_epoch_std_loss_recon[epoch], \
                                                                                       per_epoch_avg_loss_gan[epoch], \
                                                                                       per_epoch_std_loss_gan[epoch]))
+        netG.train()
+        netE.train()
+        netD2.train()
     
+    # end of training
     joblib.dump( {'avg_recon': per_epoch_avg_loss_recon, 'std_recon': per_epoch_std_loss_recon, 
                                      'avg_gan': per_epoch_avg_loss_gan, 'std_gan': per_epoch_std_loss_gan}, losspath+'testloss.pkl')
         

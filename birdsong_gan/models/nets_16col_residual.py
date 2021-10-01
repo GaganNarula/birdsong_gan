@@ -298,9 +298,9 @@ class InceptionNet(nn.Module):
         # flatten its last dimensions
         x_real = x_real.view(-1, x_real.size(1)*x_real.size(2)*x_real.size(3))
         
-        x_gen = self.get_middle_layer(x_real)
+        x_gen = self.get_middle_layer(x_gen)
         # flatten its last dimensions
-        x_gen = x_gen.view(-1, x_real.size(1)*x_real.size(2)*x_real.size(3))
+        x_gen = x_gen.view(-1, x_gen.size(1)*x_gen.size(2)*x_gen.size(3))
         
         return FID(x_real, x_gen)
     
