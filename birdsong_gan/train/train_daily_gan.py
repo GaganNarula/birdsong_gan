@@ -8,9 +8,12 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import numpy as np
 from datetime import datetime
-from data.dataset import bird_dataset
+from data.dataset import bird_dataset, transform
 import itertools
 from models.nets_16col_residual import _netD, _netE, _netG, InceptionNet, weights_init
+from hmm.hmm import learnKmodels_getbest
+from hmm.hmm_utils import munge_sequences
+from utils.utils import overlap_encode, overlap_decode, gagan_save_spect, save_audio_sample, rescale_spectrogram
 
 
 # some cuda / cudnn settings for memory issues#
@@ -62,7 +65,6 @@ class Model:
         ngf = opts['ngf']
         ndf = opts['ndf']
         nc = opts['nc']
-        logpt = opts['log_every']
 
         if opts['cuda']:
             self.device = 'cuda:0'
@@ -137,9 +139,11 @@ class Model:
 
     def make_dataloader(self, day=0):
 
-        TD, age = self.dataset.make_chunk_tensor_dataset(day, imageW=self.opts['imageW'],
+        TD, _ = self.dataset.make_chunk_tensor_dataset(day, imageW=self.opts['imageW'],
                                                         shuffle_chunks=True)
-
+        return DataLoader(TD, batch_size= self.opts['batchSize'], sampler = None,
+                                    shuffle=True, num_workers=int(self.opts['workers']),
+                                    drop_last = True)
 
     def train_one_day(self, traindataloader):
         
@@ -269,6 +273,7 @@ class Model:
 
                     fake = self.netG(noise)
                     fid = self.netD3.fid_score(data.detach(), fake.detach())
+                    FID.append(fid)
 
                 # SAVE LOSSES
                 minibatchLossD1.append(float(err_d1.detach()))
@@ -277,3 +282,98 @@ class Model:
                 minibatchLossG1_rec.append(float(errG_recon.detach()))
                 minibatchLossG2.append(float(err_g_d2.detach()))
                 minibatchLossD3.append(float(inception_loss.detach()))
+
+                if i % self.opts['log_every'] == 0:
+                    # LOG 
+                    
+                    print('[%d/%d][%d/%d] D1: %.2f D2: %.2f G1_gan: %.2f G1_rec: %.2f G2: %.2f D3: %.2f FID: %.3f MDS: %.2f'
+                      % (epoch, self.opts['niter'], i, len(traindataloader),
+                        np.mean(minibatchLossD1[-self.opts['log_every']:]),
+                         np.mean(minibatchLossD2[-self.opts['log_every']:]),
+                         np.mean(minibatchLossG1_gan[-self.opts['log_every']:]),
+                         np.mean(minibatchLossG1_rec[-self.opts['log_every']:]),
+                         np.mean(minibatchLossG2[-self.opts['log_every']:]),
+                         np.mean(minibatchLossD3[-self.opts['log_every']:]),
+                         np.mean(FID[-self.opts['log_every']:]),
+                         minbE)
+                      )
+                
+                    # sample and reconstruct
+                    with torch.no_grad():
+                        
+                        if self.opts['noise_dist'] == 'normal':
+                            noise.normal_(0., self.opts['z_var'])
+                        else:
+                            noise.uniform_(-self.opts['z_var'],self.opts['z_var'])
+                        
+                        # generate fakes
+                        #fake = self.netG(noise)
+                        #out_shape = [self.opts['imageH'], self.opts['imageW']]
+                        #fake_spectrograms =[fake.data[k].cpu().numpy().reshape(out_shape) for k in range(8)]
+                        #fake_spectrograms = np.concatenate(fake_spectrograms,axis=1)
+                        #gagan_save_spect('%s/fake_samples_epoch_%03d_batchnumb_%d.png' 
+                        #                    % (self.opts['outf'], epoch, i),rescale_spectrogram(fake_spectrograms))
+                        #gagan_save_spect('%s/fake_samples_epoch_%03d_batchnumb_%d.eps' 
+                        #                    % (self.opts['outf'], epoch, i),rescale_spectrogram(fake_spectrograms))
+
+
+                        # randomly sample a file and save audio sample
+                        sample = self.dataset.get_random_item()[0] # first element of list output 
+                        
+                        # audio
+                        if self.opts['get_audio']:
+                            try:
+                                save_audio_sample(lc.istft(inverse_transform(transform(sample))), \
+                                                    '%s/input_audio_epoch_%03d_batchnumb_%d.wav' % 
+                                                    (self.opts['outf'], epoch, i), self.opts['sample_rate'])
+                            except:
+                                print('..audio buffer error, skipped audio file generation')
+
+                        # save original spectrogram
+                        gagan_save_spect('%s/input_spect_epoch_%03d_batchnumb_%d.eps'
+                                            % (self.opts['outf'], epoch, i), 
+                                            rescale_spectrogram(transform(sample)))
+                        # save reconstruction
+                        zvec = overlap_encode(sample, netE, transform_sample = False, imageW = self.opts['imageW'],
+                                            noverlap = self.opts['noverlap'], cuda = self.opts['cuda'])
+                        spect, audio = overlap_decode(zvec, netG, noverlap = self.opts['noverlap'], get_audio = self.opts['get_audio'], 
+                                                    cuda = self.opts['cuda'])
+                        # save reconstructed spectrogram
+                        spect = rescale_spectrogram(spect)
+                        gagan_save_spect('%s/rec_spect_epoch_%03d_batchnumb_%d.eps' % (self.opts['outf'], epoch, i), spect)
+                        
+                        if self.opts['get_audio']:
+                            try:
+                                save_audio_sample(audio,'%s/rec_audio_epoch_%03d_batchnumb_%d.wav' % 
+                                                    (self.opts['outf'], epoch, i),self.opts['sample_rate'])
+                            except:
+                                print('..audio buffer error, skipped audio file generation')
+
+
+
+
+    def train_hmm(self, day, hidden_size):
+        
+        # encode all spectrograms from that day
+        X = self.dataset.get(day)
+        self.Z = [overlap_encode(x, self.netE, transform_sample = False, imageW = self.opts['imageW'], 
+                                 noverlap = self.opts['noverlap'], cuda = self.opts['cuda']) for x in X]
+        # munge sequences
+        if self.opts['munge']:
+            self.Z = munge_sequences(self.Z, self.opts['munge_len'])
+
+        # split into train and validation
+        ids = np.random.permutation(len(self.Z))
+        ntrain = int(self.opts['hmm_train_proportion'] * len(ids))
+        ztrain = [self.Z[ids[i]] for i in range(ntrain)]
+        ztest = [self.Z[ids[i]] for i in range(ntrain, len(ids))]
+        ids_train = ids[:ntrain]
+        ids_test = ids[ntrain:]
+
+        # get lengths of sequences
+        Ltrain = [z.shape[0] for z in ztrain]
+        # train HMM 
+        print('# learning hmm with %d states #'%(hidden_size))
+        model = learnKmodels_getbest(ztrain, None, Ltrain, hidden_size, self.opts)
+
+        

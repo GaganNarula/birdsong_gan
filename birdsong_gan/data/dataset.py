@@ -167,6 +167,7 @@ class songbird_dataset(data.Dataset):
         return X
 
     
+
 class songbird_contiguous_dataset(data.Dataset):
     '''
         Extracts a contiguous set of spectrogram chunks for training
@@ -454,9 +455,10 @@ class bird_dataset(object):
             X[k] = transform(np.array(self.file.get(day + '/' + nfiles[i])))
         return X
     
-    def make_chunk_tensor_dataset(self, day=0, nsamps=-1, imageW=16, shuffle_chunks=True):
+    def make_chunk_tensor_dataset(self, seqs=None, day=0, nsamps=-1, imageW=16, shuffle_chunks=True):
         # get a list of all the spectrograms
-        seqs = self.get(day, nsamps)
+        if seqs is None:
+            seqs = self.get(day, nsamps)
         
         X = [] # list of all the chunks 
         for seq in seqs:
