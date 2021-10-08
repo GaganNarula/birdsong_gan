@@ -6,6 +6,8 @@ import librosa as lc
 import numpy as np
 import os
 import pickle
+import re
+
 
 
 def norm_transform(im):
@@ -406,6 +408,9 @@ class songbird_spectrogram_chunks_single_file(data.Dataset):
     
     
     
+
+
+
 class bird_dataset(object):
     ''' Main dataset class for loading, transforming spectrograms 
         from a single bird. No data.Dataset subclass. This class is
@@ -479,6 +484,83 @@ class bird_dataset(object):
         self.file.close()
         
         
+
+class bird_dataset_single_hdf(object):
+    '''Like bird_dataset but works on a single hdf object containing all 
+        different birds' data.
+
+        Main dataset class for loading, transforming spectrograms 
+        from a single bird. No data.Dataset subclass. This class is
+        used for analysis, spectrogram display or hmm learning.
+    '''
+    def __init__(self, path2hdf, birdname):
+        
+        self.bird = birdname
+        self.file = h5py.File(path2hdf,'r')
+        # filter out this birds files
+        self.filtered_keys = self._filter_for_bird()
+        # find which days exist for this bird
+        # assume format of days is YYYY-MM-DD and this 
+        # string is in the file name
+        self.day_names = self._which_days()
+        self.ndays = len(self.day_names)
+        print(f'... total number of folders for bird {birdname} = {self.ndays} ...')
+
+    def _filter_for_bird(self):
+        keyss = list(self.file.keys())
+        return list(filter(lambda x: self.bird in x, keyss))
+
+    def _which_days(self):
+        day_names = []
+        for f in self.filtered_keys:
+            match = re.search(r'[0-9]{4}-[0-9]{2}-[0-9]{2}',f)
+            if match is not None:
+                day_names.append(match.group())
+        return list(set(day_names))
+
+    def _filter_files(self, day=0):
+        dayname = self.day_names[day]
+        return list(filter(lambda x: dayname in x, self.filtered_keys))
+
+    def get(self, day=0, nsamps=-1):
+        ''' get "nsamps" spectrograms from day number "day" ''' 
+        files = self._filter_files(day)
+        nfiles = len(files)
+        # choose nsamp random files
+        if nsamps == -1:
+            # get all songs
+            ids = np.arange(nfiles)
+        else:
+            ids = np.random.choice(nfiles, size = nsamps, replace=False)
+
+        X = [None for i in range(len(ids))]
+        for (k,i) in enumerate(ids):
+            X[k] = transform(np.array(self.file.get(files[i])))
+        return X
+    
+    def make_chunk_tensor_dataset(self, seqs=None, day=0, nsamps=-1, imageW=16,
+                                shuffle_chunks=True):
+        # get a list of all the spectrograms
+        if seqs is None:
+            seqs = self.get(day, nsamps)
+        
+        X = [] # list of all the chunks 
+        for seq in seqs:
+            L = seq.shape[1] # length of time
+            idx = 0
+            while idx + imageW <= L:
+                X.append(seq[:, idx : idx+imageW])
+        # stack
+        X = np.stack(X)
+        
+        if shuffle_chunks:
+            np.random.shuffle(X)
+            
+        # output a tensor dataset instance and the age of the day as a tensor
+        return data.TensorDataset(torch.from_numpy(X).float()), torch.FloatTensor([day])
+            
+    def close(self):
+        self.file.close()
         
         
 class songbird_syllable_dataset(data.Dataset):
@@ -550,6 +632,8 @@ class songbird_syllable_dataset(data.Dataset):
                 X = X[:,:N]
         return X
     
+
+
 
     
 def segment_spectrogram(x, thresh = 5, mindur = 5):
