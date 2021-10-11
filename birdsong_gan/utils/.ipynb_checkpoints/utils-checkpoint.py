@@ -10,6 +10,7 @@ import fnmatch
 import shutil
 import soundfile as sf
 import torch
+from datetime import datetime
 import matplotlib.pyplot as plt
 plt.rcParams.update({'font.size': 16})
 
@@ -393,3 +394,21 @@ def gagan_save_spect(path, spect, frmat='eps'):
     plt.imshow(spect, origin='lower', cmap='gray')
     plt.savefig(path, dpi=100, format=frmat)
     plt.close()
+    
+    
+def make_output_folder(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+    dirs = os.listdir(path)
+    for d in dirs:
+        if len(os.listdir(join(path, d)))<=3:
+            try:
+                os.rmdir(join(path, d))
+            except:
+                shutil.rmtree(join(path,d))
+    path += str(datetime.now()).replace(':', '-')
+    path = path.replace(' ','_')
+    if not os.path.exists(path):
+        os.makedirs(path)
+        os.makedirs(join(path,'net_training_losses'))
+    return path

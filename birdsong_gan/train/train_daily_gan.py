@@ -1,34 +1,43 @@
-from time import daylight
+
+import sys
+import os
+sys.path.append(os.pardir)
+
 import torch
 import torch.nn as nn
-from configs.cfg import *
+import torch.backends.cudnn as cudnn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+
 import os
 from os.path import join
 import joblib
 import argparse
 import shutil
 import random
-import torch.backends.cudnn as cudnn
-import torch.optim as optim
-from torch.utils.data import DataLoader
 import numpy as np
 import librosa as lc
 from datetime import datetime
-from data.dataset import bird_dataset_single_hdf, transform, inverse_transform
 import itertools
+import pdb
+
+from configs.cfg import *
+from data.dataset import bird_dataset_single_hdf, transform, inverse_transform
 from models.nets_16col_residual import _netD, _netE, _netG, InceptionNet, weights_init
+
 from hmm.hmm import learnKmodels_getbest
 from hmm.hmm_utils import munge_sequences, full_entropy, create_output, number_of_active_states_viterbi
 from utils.utils import overlap_encode, overlap_decode, gagan_save_spect, save_audio_sample, \
-    rescale_spectrogram
+    rescale_spectrogram, make_output_folder
 
 
 
-gan_opts = {'datapath': '', 'outf': '', 'distance_fun': 'L1', 'subset_age_weights' : [0., 1.], 
+gan_opts = {'datapath': '', 'outf': '', 'birdname':'',
+            'distance_fun': 'L1', 'subset_age_weights' : [0., 1.], 
             'workers': 6, 'batchSize': 128, 
-            'imageH': 129, 'imageW': 16, 'noverlap':0, 'nz': 16,'nc': 1, 'ngf': 256,
+            'imageH': 129, 'imageW': 16, 'noverlap':0, 'nz': 16,'nc': 1, 'ngf': 128,
             'ndf': 128,'nepochs': 10,
-            'lr': 1e-5, 'lambdaa': 150, 'zreg_weight': 1, 'schedule_lr':False, 'd_noise': 0.1,
+            'lr': 1e-5, 'lambdaa': 100., 'zreg_weight': 1, 'schedule_lr':False, 'd_noise': 0.1,
             'beta1': 0.5, 'cuda': True, 'ngpu': 1, 'nreslayers': 3, 'z_reg':False, 'mds_loss':False,
             'netG': '','netE': '','netD1':'','netD2':'','netD3':'', 'log_every': 300,
             'sample_rate': 16000.,'noise_dist': 'normal','z_var': 1.,'nfft': 256, 'get_audio': False,
@@ -58,22 +67,7 @@ cudnn.deterministic = True
 cudnn.benchmark = True
 #cudnn.allow_tf32 = True
 
-def make_output_folder(path):
-    if not os.path.exists(path):
-        os.makedirs(path)
-    dirs = os.listdir(path)
-    for d in dirs:
-        if len(os.listdir(join(path, d)))<=3:
-            try:
-                os.rmdir(join(path, d))
-            except:
-                shutil.rmtree(join(path,d))
-    path += str(datetime.now()).replace(':', '-')
-    path = path.replace(' ','_')
-    if not os.path.exists(path):
-        os.makedirs(path)
-        os.makedirs(join(path,'net_training_losses'))
-    return path
+
     
 
 
@@ -102,7 +96,7 @@ class Model:
 
         self.dataset = dataset
 
-        self.nz = opts['self.nz']
+        self.nz = opts['nz']
         self.ngf = opts['ngf']
         self.ndf = opts['ndf']
 
@@ -113,7 +107,7 @@ class Model:
 
         if init_nets is None:
             self._init_networks(opts['netG'], opts['netE'], opts['netD1'], opts['netD2'],
-                                opts['netD2'], opts['netD3'])
+                                 opts['netD3'])
         else:
             self._set_networks(*init_nets)
 
@@ -190,10 +184,6 @@ class Model:
         self.optimizerG = optim.Adam(itertools.chain(self.netG.parameters(),
                                             self.netE.parameters()), lr=self.opts['lr'],
                                             betas = (self.opts['beta1'], 0.999))
-        # for mds loss
-        if self.opts['mds_loss']:
-            self.optimizerE = optim.Adam(self.netE.parameters(), lr=self.opts['lr'], 
-                                        betas = (self.opts['beta1'], 0.999))
 
 
     def make_dataloader(self, day=0):
@@ -225,7 +215,7 @@ class Model:
                 
                 data = data[0] # pytorch produces tuples by default
                 data = data.view(data.size(0),1,data.size(1),data.size(2)).to(self.device)
-
+                
                 # map data X -> Z latent
                 encoding = self.netE(data)
                 # map Z -> Xhat
@@ -267,7 +257,7 @@ class Model:
                 # maximize log D(Xhat) or minimize -log D(Xhat) + MSE for encoder and generator
                 self.optimizerG.step()
 
-                # ------------- Diffusion step ---------------
+                # ------------- Diffusion step --------------- #
 
                 encoding = self.netE(data)
                 reconstruction = self.netG(encoding)
@@ -293,8 +283,7 @@ class Model:
 
                 #------ extra regularization for z------#
                 if self.opts['z_reg']:
-                    self.netG.zero_grad()
-                    self.netE.zero_grad()
+                    self.optimizerG.zero_grad()
                     fake = self.netG(noise)
                     err_E = self.opts['zreg_weight'] * self.criterion_dist(self.netE(fake), noise.squeeze())
                     err_E.backward()
@@ -323,17 +312,16 @@ class Model:
                 self.optimizerD3.step()
 
                 # compute fid score
-                with torch.no_grad():
+                #with torch.no_grad():#
 
-                    if self.opts['noise_dist'] == 'normal':
-                        noise.normal_(0., self.opts['z_var'])
-                    else:
-                        noise.uniform_(-self.opts['z_var'],self.opts['z_var'])
-
-                    fake = self.netG(noise)
-                    fid = self.netD3.fid_score(data.detach(), fake.detach())
-                    FID.append(fid)
-
+                #    if self.opts['noise_dist'] == 'normal':
+                #        noise.normal_(0., self.opts['z_var'])
+                #    else:
+                #        noise.uniform_(-self.opts['z_var'],self.opts['z_var'])
+                #    fake = self.netG(noise)
+                #    fid = self.netD3.fid_score(data.detach(), fake.detach())
+                #    FID.append(fid)
+                FID.append(-1.)
                 # SAVE LOSSES
                 minibatchLossD1.append(float(err_d1.detach()))
                 minibatchLossD2.append(float(err_d2.detach()))
@@ -346,7 +334,7 @@ class Model:
                     # LOG 
                     
                     print('[%d/%d][%d/%d] D1: %.2f D2: %.2f G1_gan: %.2f G1_rec: %.2f G2: %.2f D3: %.2f FID: %.3f'
-                      % (epoch, self.opts['niter'], i, len(traindataloader),
+                      % (epoch, self.opts['nepochs'], i, len(traindataloader),
                         np.mean(minibatchLossD1[-self.opts['log_every']:]),
                          np.mean(minibatchLossD2[-self.opts['log_every']:]),
                          np.mean(minibatchLossG1_gan[-self.opts['log_every']:]),
@@ -356,20 +344,21 @@ class Model:
                          np.mean(FID[-self.opts['log_every']:]))
                       )
 
-                    self.checkpoint(i, epoch)
+                    self.checkpoint(day, i, epoch)
 
                 # END OF MINIBATCH
 
             # END OF EPOCH
             # document losses at end of epoch
-            losspath = join(self.outpath, 'net_training_losses/')
-            np.save(losspath+'D1',np.array(minibatchLossD1))
-            np.save(losspath+'D2',np.array(minibatchLossD2))
-            np.save(losspath+'G1rec',np.array(minibatchLossG1_rec))
-            np.save(losspath+'G1gan',np.array(minibatchLossG1_gan))
-            np.save(losspath+'G2',np.array(minibatchLossG2))
-            np.save(losspath+'D3',np.array(minibatchLossD3))
-            np.save(losspath+'FID',np.array(FID))
+            losspath = join(self.outpath, 'net_training_losses')
+            os.makedirs(losspath, exist_ok=False)
+            np.save(join(losspath, 'epoch'+str(epoch)+'_D1'),np.array(minibatchLossD1))
+            np.save(join(losspath, 'epoch'+str(epoch)+'_D2'),np.array(minibatchLossD2))
+            np.save(join(losspath, 'epoch'+str(epoch)+'_G1_rec'),np.array(minibatchLossG1_rec))
+            np.save(join(losspath, 'epoch'+str(epoch)+'_G1_gan'),np.array(minibatchLossG1_gan))
+            np.save(join(losspath, 'epoch'+str(epoch)+'_D2'),np.array(minibatchLossG2))
+            np.save(join(losspath, 'epoch'+str(epoch)+'_D3'),np.array(minibatchLossD3))
+            np.save(join(losspath, 'epoch'+str(epoch)+'_FID'),np.array(FID))
                     
                     
             # do checkpointing of models
@@ -385,7 +374,7 @@ class Model:
                                                                                 day))
             
 
-    def checkpoint(self, minibatch_idx, epoch) -> None:
+    def checkpoint(self, day, minibatch_idx, epoch) -> None:
         
         # noise variable
         noise = torch.FloatTensor(self.opts['batchSize'], self.nz, 1,1).to(self.device)
@@ -400,12 +389,12 @@ class Model:
         
 
             # randomly sample a file and save audio sample
-            sample = self.dataset.get_random_item()[0] # first element of list output 
+            sample = self.dataset.get(day, nsamps=1)[0] # first element of list output 
             
             # audio
             if self.opts['get_audio']:
                 try:
-                    save_audio_sample(lc.istft(inverse_transform(transform(sample))), \
+                    save_audio_sample(lc.istft(inverse_transform(sample)), \
                                         '%s/input_audio_epoch_%03d_batchnumb_%d.wav' % 
                                         (self.outpath, epoch, minibatch_idx), self.opts['sample_rate'])
                 except:
@@ -414,7 +403,7 @@ class Model:
             # save original spectrogram
             gagan_save_spect('%s/input_spect_epoch_%03d_batchnumb_%d.eps'
                                 % (self.outpath, epoch, minibatch_idx), 
-                                rescale_spectrogram(transform(sample)))
+                                rescale_spectrogram(sample))
             # get reconstruction
             zvec = overlap_encode(sample, self.netE, transform_sample = False,
                                 imageW = self.opts['imageW'],
@@ -466,7 +455,7 @@ class Model:
         # get lengths of sequences
         Ltrain = [z.shape[0] for z in ztrain]
         # train HMM 
-        print('# learning hmm with %d states #'%(hidden_size))
+        print('\n..... learning hmm with %d states .....'%(hidden_size))
         self.hmm = learnKmodels_getbest(ztrain, None, Ltrain, hidden_size, self.opts)
 
         # produce samples
@@ -493,9 +482,9 @@ class Model:
         ztosave = np.concatenate(ztosave, axis=0)
 
         # save samples
-        create_output(self.hmm, outputfolder, hidden_size, day, self.P, self.netG, [])
+        create_output(self.hmm, outputfolder, hidden_size, day, self.opts, self.netG, [])
         # save real files
-        create_output(self.hmm, outputfolder, hidden_size, day, self.P, self.netG, ztosave)
+        create_output(self.hmm, outputfolder, hidden_size, day, self.opts, self.netG, ztosave)
         print('# generated samples #')
 
         # get number of active states etc
@@ -521,17 +510,18 @@ class Model:
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--datapath', required=True, help='path to training dataset')
-parser.add_argument('--birdname', type=str, )
+parser.add_argument('--birdname', type=str, required=True)
 parser.add_argument('--outf', required=True, help='folder to output images and model checkpoints')
+parser.add_argument('--chain_networks', action='store_true', help='whether to initialize the networks from networks on the previous day')
 parser.add_argument('--batchSize', type=int, default=128, help='input batch size')
 parser.add_argument('--nz', type=int, default=32, help='size of the latent z vector')
 parser.add_argument('--train_residual', action = 'store_true')
 parser.add_argument('--noise_dist', type=str, default = 'normal', help='noise distribution: {normal, uniform, t}')
 parser.add_argument('--lambdaa', type = float, default = 100., help = 'weighting for recon loss')
-parser.add_argument('--ngf', type=int, default=256)
-parser.add_argument('--ndf', type=int, default=256)
+parser.add_argument('--ngf', type=int, default=128,  help='num filter progression factor for generator')
+parser.add_argument('--ndf', type=int, default=128, help='num filter progression factor for discriminator')
 parser.add_argument('--nepochs', type=int, default=50, help='number of epochs to train GAN ')
-parser.add_argument('--lr', type=float, default = 0.00001, help='learning rate')
+parser.add_argument('--lr', type=float, default = 1e-5, help='learning rate')
 parser.add_argument('--z_reg', action="store_true", help='whether to regularize the posterior')
 parser.add_argument('--zreg_weight', type = float, default = 1., help = 'weight for z regularization')
 parser.add_argument('--z_var', type = float, default = 1., help = 'variance of latent prior')
@@ -545,6 +535,7 @@ parser.add_argument('--netG',type = str, default = '', help='path to generator n
 parser.add_argument('--netD1',type = str, default = '', help='path to disc 1 network file')
 parser.add_argument('--netD2',type = str, default = '', help='path to encoder network file')
 parser.add_argument('--netD3',type = str, default = '', help='path to encoder network file')
+# for HMM
 parser.add_argument('--hidden_state_size', type = int, nargs = '+', default = [5, 10, 15, 20, 30, 50, 75, 100])
 parser.add_argument('--covariance_type', type = str, default = 'spherical')
 parser.add_argument('--covars_prior', type = float, default = 1., help ='diagnoal term weight on the prior covariance')
@@ -552,11 +543,10 @@ parser.add_argument('--fit_params', type = str, default = 'stmc', help = 'which 
 parser.add_argument('--transmat_prior', type = float, default = 1., help = 'transition matrix prior concentration')
 parser.add_argument('--n_iter', type = int, default = 400, help = 'number of EM iterations')
 parser.add_argument('--tolerance', type = float, default = 0.01)
-parser.add_argument('--get_audio', action = 'store_true', help = 'generate audio files as well')
 parser.add_argument('--start_from', type = int, default = 0, help = 'start day of learning') 
 parser.add_argument('--last_day', type = int, default = -1, help = 'last day of learning')
 parser.add_argument('--min_seq_multiplier', type = int ,default = 10, help='the number of files should be at least hidden size x this factor')
-parser.add_argument('--init_params', type = str, default = 'str', help='which variables to initialize, or to initialize with kmeans, enter kmeans')
+parser.add_argument('--init_params', type = str, default = 'stc', help='which variables to initialize, or to initialize with kmeans, enter kmeans')
 parser.add_argument('--munge', action = 'store_true', help='whether to concate')
 parser.add_argument('--munge_len', type = int, default = 50, help = 'minimum length of a sequence to which sequences be concatenated')
 

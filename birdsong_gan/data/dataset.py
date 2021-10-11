@@ -460,17 +460,22 @@ class bird_dataset(object):
             X[k] = transform(np.array(self.file.get(day + '/' + nfiles[i])))
         return X
     
-    def make_chunk_tensor_dataset(self, seqs=None, day=0, nsamps=-1, imageW=16, shuffle_chunks=True):
-        # get a list of all the spectrograms
-        if seqs is None:
-            seqs = self.get(day, nsamps)
+    def make_chunk_tensor_dataset(self, day=0, nsamps=-1, imageW=16,
+                                shuffle_chunks=True):
+        files = self._filter_files(day)
+        nfiles = len(files)
         
         X = [] # list of all the chunks 
-        for seq in seqs:
-            L = seq.shape[1] # length of time
+        for i in range(nfiles):
+            # get and transform spectrogram 
+            seq = transform(np.array(self.file.get(files[i])))
+            
+            L = seq.shape[1] # duration of spectrogram
             idx = 0
             while idx + imageW <= L:
                 X.append(seq[:, idx : idx+imageW])
+                idx += imageW
+                
         # stack
         X = np.stack(X)
         
@@ -538,18 +543,22 @@ class bird_dataset_single_hdf(object):
             X[k] = transform(np.array(self.file.get(files[i])))
         return X
     
-    def make_chunk_tensor_dataset(self, seqs=None, day=0, nsamps=-1, imageW=16,
+    def make_chunk_tensor_dataset(self, day=0, nsamps=-1, imageW=16,
                                 shuffle_chunks=True):
-        # get a list of all the spectrograms
-        if seqs is None:
-            seqs = self.get(day, nsamps)
+        files = self._filter_files(day)
+        nfiles = len(files)
         
         X = [] # list of all the chunks 
-        for seq in seqs:
-            L = seq.shape[1] # length of time
+        for i in range(nfiles):
+            # get and transform spectrogram 
+            seq = transform(np.array(self.file.get(files[i])))
+            
+            L = seq.shape[1] # duration of spectrogram
             idx = 0
             while idx + imageW <= L:
                 X.append(seq[:, idx : idx+imageW])
+                idx += imageW
+                
         # stack
         X = np.stack(X)
         
@@ -561,6 +570,8 @@ class bird_dataset_single_hdf(object):
             
     def close(self):
         self.file.close()
+        
+        
         
         
 class songbird_syllable_dataset(data.Dataset):
