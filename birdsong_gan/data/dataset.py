@@ -526,7 +526,7 @@ class bird_dataset_single_hdf(object):
     def _filter_files(self, day=0):
         dayname = self.day_names[day]
         return list(filter(lambda x: dayname in x, self.filtered_keys))
-
+    
     def get(self, day=0, nsamps=-1):
         ''' get "nsamps" spectrograms from day number "day" ''' 
         files = self._filter_files(day)
@@ -559,14 +559,12 @@ class bird_dataset_single_hdf(object):
                 X.append(seq[:, idx : idx+imageW])
                 idx += imageW
                 
-        # stack
-        X = np.stack(X)
-        
         if shuffle_chunks:
             np.random.shuffle(X)
             
         # output a tensor dataset instance and the age of the day as a tensor
-        return data.TensorDataset(torch.from_numpy(X).float()), torch.FloatTensor([day])
+        return data.TensorDataset(torch.from_numpy(np.stack(X)).float()), \
+                    torch.FloatTensor([day]), X
             
     def close(self):
         self.file.close()

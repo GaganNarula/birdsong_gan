@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
+from torch.optim.lr_scheduler import ExponentialLR
 from torch.utils.data import DataLoader
 
 import os
@@ -34,10 +35,10 @@ from utils.utils import overlap_encode, overlap_decode, gagan_save_spect, save_a
 
 gan_opts = {'datapath': '', 'outf': '', 'birdname':'',
             'distance_fun': 'L1', 'subset_age_weights' : [0., 1.], 
-            'workers': 6, 'batchSize': 128, 
+            'workers': 6, 'batchSize': 128, 'chain_networks': False,
             'imageH': 129, 'imageW': 16, 'noverlap':0, 'nz': 16,'nc': 1, 'ngf': 128,
-            'ndf': 128,'nepochs': 10,
-            'lr': 1e-5, 'lambdaa': 100., 'zreg_weight': 1, 'schedule_lr':False, 'd_noise': 0.1,
+            'ndf': 128,'nepochs': 10, 'lr_schedule': False,
+            'lr': 1e-4, 'lambdaa': 100., 'zreg_weight': 1, 'schedule_lr':False, 'd_noise': 0.1,
             'beta1': 0.5, 'cuda': True, 'ngpu': 1, 'nreslayers': 3, 'z_reg':False, 'mds_loss':False,
             'netG': '','netE': '','netD1':'','netD2':'','netD3':'', 'log_every': 300,
             'sample_rate': 16000.,'noise_dist': 'normal','z_var': 1.,'nfft': 256, 'get_audio': False,
@@ -46,7 +47,7 @@ gan_opts = {'datapath': '', 'outf': '', 'birdname':'',
 hmm_opts = {'hidden_state_size' : [5, 10, 15, 20, 30, 50, 75, 100], 'covariance_type' : 'spherical', 
            'fit_params' : 'stmc', 'transmat_prior' : 1., 'n_iter' : 300, 'tolerance' : 0.01,
             'covars_prior' : 1., 'init_params' : 'stmc',
-            'train_proportion' : 0.7, 'nsamplesteps' : 128, 'nsamps': 10,
+            'hmm_train_proportion' : 0.7, 'nsamplesteps' : 128, 'nsamps': 10,
             'sample_var': 0., 'sample_invtemperature' : 1.,
             'munge' : False, 'munge_len' : 50,
             'n_restarts': 1, 'do_chaining': False,
@@ -184,12 +185,24 @@ class Model:
         self.optimizerG = optim.Adam(itertools.chain(self.netG.parameters(),
                                             self.netE.parameters()), lr=self.opts['lr'],
                                             betas = (self.opts['beta1'], 0.999))
+        
+        if self.opts['lr_schedule']:
+            gamma=0.9 # multiply lr by this every time scheduler is called
+            self.schedulerG = ExponentialLR(self.optimizerG,gamma,verbose=True)
+            self.schedulerD1 = ExponentialLR(self.optimizerD1,gamma,verbose=True)
+            self.schedulerD2 = ExponentialLR(self.optimizerD2,gamma,verbose=True)
+            self.schedulerD3 = ExponentialLR(self.optimizerD3,gamma,verbose=True)
 
-
+    def _scheduler_step(self):
+        self.schedulerG.step()
+        self.schedulerD1.step()
+        self.schedulerD2.step()
+        self.schedulerD3.step()
+        
     def make_dataloader(self, day=0):
 
-        TD, _ = self.dataset.make_chunk_tensor_dataset(day, imageW=self.opts['imageW'],
-                                                        shuffle_chunks=True)
+        TD, _, self.X = self.dataset.make_chunk_tensor_dataset(day, imageW=self.opts['imageW'],
+                                                                shuffle_chunks=True)
         return DataLoader(TD, batch_size= self.opts['batchSize'], sampler = None,
                                     shuffle=True, num_workers=int(self.opts['workers']),
                                     drop_last = True)
@@ -347,11 +360,15 @@ class Model:
                     self.checkpoint(day, i, epoch)
 
                 # END OF MINIBATCH
-
+            
+            if self.opts['lr_schedule']:
+                self._scheduler_step()
+                
             # END OF EPOCH
             # document losses at end of epoch
             losspath = join(self.outpath, 'net_training_losses')
-            os.makedirs(losspath, exist_ok=False)
+            if not os.path.exists(losspath):
+                os.makedirs(losspath)
             np.save(join(losspath, 'epoch'+str(epoch)+'_D1'),np.array(minibatchLossD1))
             np.save(join(losspath, 'epoch'+str(epoch)+'_D2'),np.array(minibatchLossD2))
             np.save(join(losspath, 'epoch'+str(epoch)+'_G1_rec'),np.array(minibatchLossG1_rec))
@@ -373,7 +390,7 @@ class Model:
             torch.save(self.netE.state_dict(), '%s/netE_epoch_%d_day_%d.pth' % (self.outpath, epoch,
                                                                                 day))
             
-
+            
     def checkpoint(self, day, minibatch_idx, epoch) -> None:
         
         # noise variable
@@ -434,7 +451,8 @@ class Model:
         
         # encode all spectrograms from that day
         if self.X is None:
-            self.X = self.dataset.get(day)
+            self.X = self.dataset.get(day, nsamps=-1)
+            
         if self.Z is None:
             self.Z = [overlap_encode(x, self.netE, transform_sample=False,
                                     imageW=self.opts['imageW'], 
@@ -526,7 +544,7 @@ parser.add_argument('--z_reg', action="store_true", help='whether to regularize 
 parser.add_argument('--zreg_weight', type = float, default = 1., help = 'weight for z regularization')
 parser.add_argument('--z_var', type = float, default = 1., help = 'variance of latent prior')
 parser.add_argument('--manualSeed', type=int, default=-1, help='random number generator seed')
-parser.add_argument('--schedule_lr', action = 'store_true', help='change learning rate')
+parser.add_argument('--lr_schedule', action = 'store_true', help='change learning rate')
 parser.add_argument('--log_every', type=int, default=300, help='make images and print loss every X batches')
 parser.add_argument('--get_audio', action='store_true', help='write wav file from spectrogram')
 parser.add_argument('--cuda', action='store_true', help='use gpu')
@@ -545,6 +563,7 @@ parser.add_argument('--n_iter', type = int, default = 400, help = 'number of EM 
 parser.add_argument('--tolerance', type = float, default = 0.01)
 parser.add_argument('--start_from', type = int, default = 0, help = 'start day of learning') 
 parser.add_argument('--last_day', type = int, default = -1, help = 'last day of learning')
+parser.add_argument('--hmm_train_proportion', type=float, default=0.7, help='proportion of sequences to be used for hmm learning')
 parser.add_argument('--min_seq_multiplier', type = int ,default = 10, help='the number of files should be at least hidden size x this factor')
 parser.add_argument('--init_params', type = str, default = 'stc', help='which variables to initialize, or to initialize with kmeans, enter kmeans')
 parser.add_argument('--munge', action = 'store_true', help='whether to concate')
@@ -598,11 +617,13 @@ if __name__ == '__main__':
 
         # make traindataloader
         traindataloader = model.make_dataloader(day)
+        print('..... %d sequences on this day .....'%(len(model.X)))
+        
         # train networks
         model.train_one_day(day, traindataloader)
 
         # then, train hmm
-        for k in range(opts['hidden_state_size']):
+        for k in range(len(opts['hidden_state_size'])):
 
             model.train_hmm(day, opts['hidden_state_size'][k])
 
