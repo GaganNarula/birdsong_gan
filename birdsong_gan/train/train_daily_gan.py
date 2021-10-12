@@ -42,11 +42,12 @@ gan_opts = {'datapath': '', 'outf': '', 'birdname':'',
             'beta1': 0.5, 'cuda': True, 'ngpu': 1, 'nreslayers': 3, 'z_reg':False, 'mds_loss':False,
             'netG': '','netE': '','netD1':'','netD2':'','netD3':'', 'log_every': 300,
             'sample_rate': 16000.,'noise_dist': 'normal','z_var': 1.,'nfft': 256, 'get_audio': False,
+            'min_num_batches': 50,
             'manualSeed': [], 'do_pca': True, 'npca_samples': 1e6, 'npca_components': 256}
 
 hmm_opts = {'hidden_state_size' : [5, 10, 15, 20, 30, 50, 75, 100], 'covariance_type' : 'spherical', 
            'fit_params' : 'stmc', 'transmat_prior' : 1., 'n_iter' : 300, 'tolerance' : 0.01,
-            'covars_prior' : 1., 'init_params' : 'stmc',
+            'covars_prior' : 1., 'init_params' : 'kmeans',
             'hmm_train_proportion' : 0.7, 'nsamplesteps' : 128, 'nsamps': 10,
             'sample_var': 0., 'sample_invtemperature' : 1.,
             'munge' : False, 'munge_len' : 50,
@@ -200,9 +201,17 @@ class Model:
         self.schedulerD3.step()
         
     def make_dataloader(self, day=0):
-
-        TD, _, self.X = self.dataset.make_chunk_tensor_dataset(day, imageW=self.opts['imageW'],
+        if not os.path.exists(join(self.outpath, 'sequences.npy')):
+            TD, _, self.X = self.dataset.make_chunk_tensor_dataset(day, imageW=self.opts['imageW'],
                                                                 shuffle_chunks=True)
+            # save the X array 
+            np.save(join(self.outpath, 'sequences.npy'), self.X)
+            
+        else:
+            # load the saved sequences array
+            self.X = np.load(join(self.outpath, 'sequences.npy'))
+            TD = data.TensorDataset(torch.from_numpy(np.stack(self.X)).float())
+            
         return DataLoader(TD, batch_size= self.opts['batchSize'], sampler = None,
                                     shuffle=True, num_workers=int(self.opts['workers']),
                                     drop_last = True)
@@ -553,6 +562,7 @@ parser.add_argument('--netG',type = str, default = '', help='path to generator n
 parser.add_argument('--netD1',type = str, default = '', help='path to disc 1 network file')
 parser.add_argument('--netD2',type = str, default = '', help='path to encoder network file')
 parser.add_argument('--netD3',type = str, default = '', help='path to encoder network file')
+parser.add_argument('--min_num_batches', type=int, default = 50, help='minimum number of minibatches')
 # for HMM
 parser.add_argument('--hidden_state_size', type = int, nargs = '+', default = [5, 10, 15, 20, 30, 50, 75, 100])
 parser.add_argument('--covariance_type', type = str, default = 'spherical')
@@ -561,11 +571,10 @@ parser.add_argument('--fit_params', type = str, default = 'stmc', help = 'which 
 parser.add_argument('--transmat_prior', type = float, default = 1., help = 'transition matrix prior concentration')
 parser.add_argument('--n_iter', type = int, default = 400, help = 'number of EM iterations')
 parser.add_argument('--tolerance', type = float, default = 0.01)
-parser.add_argument('--start_from', type = int, default = 0, help = 'start day of learning') 
-parser.add_argument('--last_day', type = int, default = -1, help = 'last day of learning')
 parser.add_argument('--hmm_train_proportion', type=float, default=0.7, help='proportion of sequences to be used for hmm learning')
 parser.add_argument('--min_seq_multiplier', type = int ,default = 10, help='the number of files should be at least hidden size x this factor')
-parser.add_argument('--init_params', type = str, default = 'stc', help='which variables to initialize, or to initialize with kmeans, enter kmeans')
+parser.add_argument('--init_params', type = str, default = 'kmeans',
+                    help='which variables to initialize, or to initialize with kmeans, enter kmeans')
 parser.add_argument('--munge', action = 'store_true', help='whether to concate')
 parser.add_argument('--munge_len', type = int, default = 50, help = 'minimum length of a sequence to which sequences be concatenated')
 
@@ -604,8 +613,11 @@ if __name__ == '__main__':
     opts['outf'] = make_output_folder(opts['outf'])
 
     for day in range(ndays):
+        
         print('\n\n.... ### WORKING ON DAY %d for bird %s ### .....'%(day, opts['birdname']))
-
+        
+        print(f'..... day name is {dataset.day_names[day]} .....')
+        
         # update output folder
         outpath = join(opts['outf'], 'day_' + str(day))
         os.makedirs(outpath, exist_ok=True)
@@ -617,14 +629,21 @@ if __name__ == '__main__':
 
         # make traindataloader
         traindataloader = model.make_dataloader(day)
-        print('..... %d sequences on this day .....'%(len(model.X)))
+        N = len(model.X)
+        print('..... %d sequences on this day .....'%(N))
+        
+        if len(traindataloader) < opts['min_num_batches']:
+            print('..... NOT ENOUGH MINIBATCHES FOR NEURAL NET .....')
+            continue
         
         # train networks
         model.train_one_day(day, traindataloader)
 
         # then, train hmm
         for k in range(len(opts['hidden_state_size'])):
-
+            
+            if N < opts['hidden_state_size'][k]*opts['min_seq_multiplier']:
+                print('..... not enough sequences for learning an hmm .....')
             model.train_hmm(day, opts['hidden_state_size'][k])
 
         # clear the saved spectrogram and latent vectors arrays

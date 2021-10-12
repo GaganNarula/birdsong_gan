@@ -521,7 +521,7 @@ class bird_dataset_single_hdf(object):
             match = re.search(r'[0-9]{4}-[0-9]{2}-[0-9]{2}',f)
             if match is not None:
                 day_names.append(match.group())
-        return list(set(day_names))
+        return sorted(list(set(day_names)))
 
     def _filter_files(self, day=0):
         dayname = self.day_names[day]

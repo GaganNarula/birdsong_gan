@@ -312,7 +312,7 @@ def learn_single_hmm_gauss_with_initialization(data, lastmodel = None, lengths =
         if init_params == 'kmeans':
             model = GaussianHMM(n_components=K, covariance_type=covtype, transmat_prior=transmat_prior, \
                        random_state=RNG, n_iter = n_iter, covars_prior=covars_prior,params=fit_params, 
-                        init_params = 'mc', verbose=False, tol=tol, min_covar = 1e-2)
+                        init_params = '', verbose=False, tol=tol, min_covar = 1e-2)
             #intialize randomly
             model.transmat_ = np.random.dirichlet(transmat_prior * np.ones(K), size = K)
             model.startprob_ = np.random.dirichlet(transmat_prior * np.ones(K))
@@ -334,6 +334,7 @@ def learn_single_hmm_gauss_with_initialization(data, lastmodel = None, lengths =
         #model._init(fake_init_data)
         model.fit(data, lengths)
         return model
+    
     model = GaussianHMM(n_components=K, covariance_type=covtype, transmat_prior=transmat_prior, \
                        random_state=RNG, n_iter = n_iter,  covars_prior=covars_prior*np.ones(K), params=fit_params, 
                         init_params = 'c', verbose=False, tol=tol)

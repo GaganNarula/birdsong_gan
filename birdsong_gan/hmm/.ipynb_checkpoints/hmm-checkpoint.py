@@ -53,13 +53,22 @@ RNG = hmm_opts['hmm_random_state']
 
 
 class HMM(object):
-    def __init__(self, datapath, netEpath, netGpath, hmm_opts, verbose = True,
+    def __init__(hmm_opts, self, datapath='', netEpath='', netGpath='', verbose = True,
                 save_output = False):
-        self.dataset = bird_dataset(datapath)
-        self.netE = load_netE(netEpath, nz = hmm_opts['nz'], 
+
+        self.dataset = None
+        if len(datapath)>0:
+            self.dataset = bird_dataset(datapath)
+        
+        self.netE = None
+        if len(netEpath)>0:
+            self.netE = load_netE(netEpath, nz = hmm_opts['nz'], 
                               ngf = hmm_opts['ngf'], nc = hmm_opts['nc'], 
                               cuda = hmm_opts['cuda'], resnet = hmm_opts['resnet'])
-        self.netG = load_netG(netGpath, nz = hmm_opts['nz'], 
+        
+        self.netG = None
+        if len(netGpath)>0:
+            self.netG = load_netG(netGpath, nz = hmm_opts['nz'], 
                               ngf = hmm_opts['ngf'], nc = hmm_opts['nc'], 
                               cuda = hmm_opts['cuda'], resnet = hmm_opts['resnet'])
         self.P = hmm_opts
@@ -303,7 +312,7 @@ def learn_single_hmm_gauss_with_initialization(data, lastmodel = None, lengths =
         if init_params == 'kmeans':
             model = GaussianHMM(n_components=K, covariance_type=covtype, transmat_prior=transmat_prior, \
                        random_state=RNG, n_iter = n_iter, covars_prior=covars_prior,params=fit_params, 
-                        init_params = 'mc', verbose=False, tol=tol, min_covar = 1e-2)
+                        init_params = '', verbose=False, tol=tol, min_covar = 1e-2)
             #intialize randomly
             model.transmat_ = np.random.dirichlet(transmat_prior * np.ones(K), size = K)
             model.startprob_ = np.random.dirichlet(transmat_prior * np.ones(K))
@@ -325,6 +334,7 @@ def learn_single_hmm_gauss_with_initialization(data, lastmodel = None, lengths =
         #model._init(fake_init_data)
         model.fit(data, lengths)
         return model
+    
     model = GaussianHMM(n_components=K, covariance_type=covtype, transmat_prior=transmat_prior, \
                        random_state=RNG, n_iter = n_iter,  covars_prior=covars_prior*np.ones(K), params=fit_params, 
                         init_params = 'c', verbose=False, tol=tol)
@@ -375,5 +385,5 @@ if __name__ == '__main__':
         if k in hmm_opts.keys():
             hmm_opts[k] = v
             
-    hmm_ = HMM(args.datapath, args.netEpath, args.netGpath, hmm_opts, verbose = True, save_output=args.save_output)
+    hmm_ = HMM(hmm_opts, args.datapath, args.netEpath, args.netGpath, verbose = True, save_output=args.save_output)
     results = hmm_.fit_all_days()
