@@ -247,6 +247,7 @@ def learnKmodels_getbest(data, lastmodel, Lengths, hidden_size, hmm_opts):
     models = []
     LL = np.nan * np.zeros(hmm_opts['n_restarts'])
     for k in range(hmm_opts['n_restarts']): 
+        
         try:
             m = learn_single_hmm_gauss_with_initialization(data, lastmodel, Lengths, hidden_size, 
                                                        hmm_opts['covariance_type'], 
@@ -256,8 +257,10 @@ def learnKmodels_getbest(data, lastmodel, Lengths, hidden_size, hmm_opts):
 
             # compute train log likelihood
             logl = m.score(np.concatenate(data,axis=0), Lengths)
-        except:
+        except Exception as e:
+            print(e)
             continue
+            
         LL[k] = logl
         models.append(m)
     # choose model with highest LL

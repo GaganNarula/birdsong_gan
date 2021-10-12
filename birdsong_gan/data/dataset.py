@@ -563,8 +563,7 @@ class bird_dataset_single_hdf(object):
             np.random.shuffle(X)
             
         # output a tensor dataset instance and the age of the day as a tensor
-        return data.TensorDataset(torch.from_numpy(np.stack(X)).float()), \
-                    torch.FloatTensor([day]), X
+        return data.TensorDataset(torch.from_numpy(np.stack(X)).float()), torch.FloatTensor([day])
             
     def close(self):
         self.file.close()

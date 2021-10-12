@@ -42,7 +42,7 @@ gan_opts = {'datapath': '', 'outf': '', 'birdname':'',
             'beta1': 0.5, 'cuda': True, 'ngpu': 1, 'nreslayers': 3, 'z_reg':False, 'mds_loss':False,
             'netG': '','netE': '','netD1':'','netD2':'','netD3':'', 'log_every': 300,
             'sample_rate': 16000.,'noise_dist': 'normal','z_var': 1.,'nfft': 256, 'get_audio': False,
-            'min_num_batches': 50,
+            'min_num_batches': 50, 'make_run_folder': False,
             'manualSeed': [], 'do_pca': True, 'npca_samples': 1e6, 'npca_components': 256}
 
 hmm_opts = {'hidden_state_size' : [5, 10, 15, 20, 30, 50, 75, 100], 'covariance_type' : 'spherical', 
@@ -52,9 +52,9 @@ hmm_opts = {'hidden_state_size' : [5, 10, 15, 20, 30, 50, 75, 100], 'covariance_
             'sample_var': 0., 'sample_invtemperature' : 1.,
             'munge' : False, 'munge_len' : 50,
             'n_restarts': 1, 'do_chaining': False,
-            'min_seq_multiplier': 10, 'cuda' : True, 'hmm_random_state' : 0,
+            'min_seq_multiplier': 5, 'cuda' : True, 'hmm_random_state' : 0,
             'last_day': -1,
-            'start_from' : 0,
+            'start_from_day' : 0,
             'get_audio': False
            }
 
@@ -201,16 +201,19 @@ class Model:
         self.schedulerD3.step()
         
     def make_dataloader(self, day=0):
-        if not os.path.exists(join(self.outpath, 'sequences.npy')):
-            TD, _, self.X = self.dataset.make_chunk_tensor_dataset(day, imageW=self.opts['imageW'],
-                                                                shuffle_chunks=True)
+        # make tensor dataset
+        TD, _ = self.dataset.make_chunk_tensor_dataset(day, imageW=self.opts['imageW'],
+                                                            shuffle_chunks=True)
+            
+        if not os.path.exists(join(self.outpath, 'sequences.pkl')):
+            self.X = self.dataset.get(day, nsamps=-1)
             # save the X array 
-            np.save(join(self.outpath, 'sequences.npy'), self.X)
+            joblib.dump({'X': self.X}, join(self.outpath, 'sequences.pkl'))
             
         else:
             # load the saved sequences array
-            self.X = np.load(join(self.outpath, 'sequences.npy'))
-            TD = data.TensorDataset(torch.from_numpy(np.stack(self.X)).float())
+            self.X = joblib.load(join(self.outpath, 'sequences.pkl'))
+            self.X = self.X['X']
             
         return DataLoader(TD, batch_size= self.opts['batchSize'], sampler = None,
                                     shuffle=True, num_workers=int(self.opts['workers']),
@@ -225,6 +228,7 @@ class Model:
         minibatchLossD2 = []
         minibatchLossG2 = []
         minibatchLossD3 = []
+        minibatchLossZreg = []
         FID = []
     
         # noise variable
@@ -310,7 +314,7 @@ class Model:
                     err_E = self.opts['zreg_weight'] * self.criterion_dist(self.netE(fake), noise.squeeze())
                     err_E.backward()
                     self.optimizerG.step()
-
+                    
                 pred_fake_d2 = self.netD2(fake.detach())
                 # true label
                 labell = torch.FloatTensor(self.opts['batchSize'],1).fill_(1.).to(self.device) 
@@ -344,6 +348,7 @@ class Model:
                 #    fid = self.netD3.fid_score(data.detach(), fake.detach())
                 #    FID.append(fid)
                 FID.append(-1.)
+                
                 # SAVE LOSSES
                 minibatchLossD1.append(float(err_d1.detach()))
                 minibatchLossD2.append(float(err_d2.detach()))
@@ -351,11 +356,12 @@ class Model:
                 minibatchLossG1_rec.append(float(errG_recon.detach()))
                 minibatchLossG2.append(float(err_g_d2.detach()))
                 minibatchLossD3.append(float(inception_loss.detach()))
-
+                minibatchLossZreg.append(float(err_E.detach()))
+                
                 if i % self.opts['log_every'] == 0:
                     # LOG 
                     
-                    print('[%d/%d][%d/%d] D1: %.2f D2: %.2f G1_gan: %.2f G1_rec: %.2f G2: %.2f D3: %.2f FID: %.3f'
+                    print('[%d/%d][%d/%d] D1: %.2f D2: %.2f G1_gan: %.2f G1_rec: %.2f G2: %.2f D3: %.2f Zreg: %.2f, FID: %.3f'
                       % (epoch, self.opts['nepochs'], i, len(traindataloader),
                         np.mean(minibatchLossD1[-self.opts['log_every']:]),
                          np.mean(minibatchLossD2[-self.opts['log_every']:]),
@@ -363,6 +369,7 @@ class Model:
                          np.mean(minibatchLossG1_rec[-self.opts['log_every']:]),
                          np.mean(minibatchLossG2[-self.opts['log_every']:]),
                          np.mean(minibatchLossD3[-self.opts['log_every']:]),
+                         np.mean(minibatchLossZreg[-self.opts['log_every']:]),
                          np.mean(FID[-self.opts['log_every']:]))
                       )
 
@@ -384,6 +391,7 @@ class Model:
             np.save(join(losspath, 'epoch'+str(epoch)+'_G1_gan'),np.array(minibatchLossG1_gan))
             np.save(join(losspath, 'epoch'+str(epoch)+'_D2'),np.array(minibatchLossG2))
             np.save(join(losspath, 'epoch'+str(epoch)+'_D3'),np.array(minibatchLossD3))
+            np.save(join(losspath, 'epoch'+str(epoch)+'_Zreg'),np.array(minibatchLossZreg))
             np.save(join(losspath, 'epoch'+str(epoch)+'_FID'),np.array(FID))
                     
                     
@@ -427,9 +435,9 @@ class Model:
                     print('..audio buffer error, skipped audio file generation')
 
             # save original spectrogram
-            gagan_save_spect('%s/input_spect_epoch_%03d_batchnumb_%d.eps'
+            gagan_save_spect('%s/input_spect_epoch_%03d_batchnumb_%d.png'
                                 % (self.outpath, epoch, minibatch_idx), 
-                                rescale_spectrogram(sample))
+                                rescale_spectrogram(sample), frmat='png')
             # get reconstruction
             zvec = overlap_encode(sample, self.netE, transform_sample = False,
                                 imageW = self.opts['imageW'],
@@ -441,8 +449,8 @@ class Model:
 
             # save reconstructed spectrogram
             spect = rescale_spectrogram(spect)
-            gagan_save_spect('%s/rec_spect_epoch_%03d_batchnumb_%d.eps' % (self.outpath,
-                            epoch, minibatch_idx), spect)
+            gagan_save_spect('%s/rec_spect_epoch_%03d_batchnumb_%d.png' % (self.outpath,
+                            epoch, minibatch_idx), spect, frmat='png')
             
             if self.opts['get_audio']:
                 try:
@@ -543,6 +551,7 @@ parser.add_argument('--chain_networks', action='store_true', help='whether to in
 parser.add_argument('--batchSize', type=int, default=128, help='input batch size')
 parser.add_argument('--nz', type=int, default=32, help='size of the latent z vector')
 parser.add_argument('--train_residual', action = 'store_true')
+parser.add_argument('--make_run_folder', action = 'store_true', help='if True, will create a run folder to save results')
 parser.add_argument('--noise_dist', type=str, default = 'normal', help='noise distribution: {normal, uniform, t}')
 parser.add_argument('--lambdaa', type = float, default = 100., help = 'weighting for recon loss')
 parser.add_argument('--ngf', type=int, default=128,  help='num filter progression factor for generator')
@@ -557,6 +566,7 @@ parser.add_argument('--lr_schedule', action = 'store_true', help='change learnin
 parser.add_argument('--log_every', type=int, default=300, help='make images and print loss every X batches')
 parser.add_argument('--get_audio', action='store_true', help='write wav file from spectrogram')
 parser.add_argument('--cuda', action='store_true', help='use gpu')
+parser.add_argument('--start_from_day', type=int, default=0, help='which day to start learning from')
 parser.add_argument('--netE',type = str, default = '', help='path to encoder network file')
 parser.add_argument('--netG',type = str, default = '', help='path to generator network file')
 parser.add_argument('--netD1',type = str, default = '', help='path to disc 1 network file')
@@ -567,12 +577,13 @@ parser.add_argument('--min_num_batches', type=int, default = 50, help='minimum n
 parser.add_argument('--hidden_state_size', type = int, nargs = '+', default = [5, 10, 15, 20, 30, 50, 75, 100])
 parser.add_argument('--covariance_type', type = str, default = 'spherical')
 parser.add_argument('--covars_prior', type = float, default = 1., help ='diagnoal term weight on the prior covariance')
-parser.add_argument('--fit_params', type = str, default = 'stmc', help = 'which parameters to fit, s = startprob, t = transmat, m = means, c = covariances')
+parser.add_argument('--fit_params', type = str, default = 'stmc',
+                    help = 'which parameters to fit, s = startprob, t = transmat, m = means, c = covariances')
 parser.add_argument('--transmat_prior', type = float, default = 1., help = 'transition matrix prior concentration')
 parser.add_argument('--n_iter', type = int, default = 400, help = 'number of EM iterations')
 parser.add_argument('--tolerance', type = float, default = 0.01)
 parser.add_argument('--hmm_train_proportion', type=float, default=0.7, help='proportion of sequences to be used for hmm learning')
-parser.add_argument('--min_seq_multiplier', type = int ,default = 10, help='the number of files should be at least hidden size x this factor')
+parser.add_argument('--min_seq_multiplier', type = int ,default = 5, help='the number of files should be at least hidden size x this factor')
 parser.add_argument('--init_params', type = str, default = 'kmeans',
                     help='which variables to initialize, or to initialize with kmeans, enter kmeans')
 parser.add_argument('--munge', action = 'store_true', help='whether to concate')
@@ -610,9 +621,10 @@ if __name__ == '__main__':
     # make model
     model = Model(dataset, '', opts, None)
     # make a save folder (run e.g. 2021-09-10_15_12_31)
-    opts['outf'] = make_output_folder(opts['outf'])
+    if opts['make_run_folder']:
+        opts['outf'] = make_output_folder(opts['outf'])
 
-    for day in range(ndays):
+    for day in range(opts['start_from_day'], ndays):
         
         print('\n\n.... ### WORKING ON DAY %d for bird %s ### .....'%(day, opts['birdname']))
         
@@ -620,7 +632,9 @@ if __name__ == '__main__':
         
         # update output folder
         outpath = join(opts['outf'], 'day_' + str(day))
-        os.makedirs(outpath, exist_ok=True)
+        if not os.path.exists(outpath):
+            os.makedirs(outpath, exist_ok=True)
+            
         model.outpath = outpath
 
         # re-initialize networks
@@ -638,12 +652,14 @@ if __name__ == '__main__':
         
         # train networks
         model.train_one_day(day, traindataloader)
-
+        
         # then, train hmm
         for k in range(len(opts['hidden_state_size'])):
             
             if N < opts['hidden_state_size'][k]*opts['min_seq_multiplier']:
                 print('..... not enough sequences for learning an hmm .....')
+                continue
+                
             model.train_hmm(day, opts['hidden_state_size'][k])
 
         # clear the saved spectrogram and latent vectors arrays

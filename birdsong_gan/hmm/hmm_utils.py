@@ -205,6 +205,8 @@ def full_entropy(model):
         for j in range(model.n_components):
             Hg += model.transmat_[k,j] * gauss_entropy(model,j)
         Hgauss += p_z1 * Hg # minus sign is absorbed into gauss_entropy function
+    Hgauss *= np.log2(np.exp(1.)) # to bits
+    
     return  Hsp, Htrans, Hgauss
 
 
