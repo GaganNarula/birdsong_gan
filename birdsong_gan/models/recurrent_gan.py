@@ -173,9 +173,6 @@ class RecurrentAttentionGAN(nn.Module):
         # define encoder
         attn = nn.TransformerEncoderLayer(d_model=rnn_input_dim, nhead=10, dim_feedforward=100)
         self.encoder = nn.ModuleList([make_downsampling_cnn(rnn_input_dim, ngf, spec_norm=False),
-                        #nn.GRU(rnn_input_dim, nrnn, nlayers, bidirectional=bidirectional, 
-                        #       dropout=dropout, batch_first=True),
-                        #torch.nn.TransformerEncoderLayer(d_model=rnn_input_dim, nhead=10, dim_feedforward=100),
                         nn.TransformerEncoder(attn, num_layers=2),
                                       nn.Linear(rnn_input_dim, nz)
                        ])

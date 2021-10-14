@@ -20,6 +20,7 @@ import numpy as np
 import librosa as lc
 from datetime import datetime
 import itertools
+import gc
 import pdb
 
 from configs.cfg import *
@@ -27,7 +28,7 @@ from data.dataset import bird_dataset_single_hdf, transform, inverse_transform
 from models.nets_16col_residual import _netD, _netE, _netG, InceptionNet, weights_init
 
 from hmm.hmm import learnKmodels_getbest
-from hmm.hmm_utils import munge_sequences, full_entropy, create_output, number_of_active_states_viterbi
+from hmm.hmm_utils import munge_sequences, full_entropy, create_output, number_of_active_states_viterbi, hmm_num_params
 from utils.utils import overlap_encode, overlap_decode, gagan_save_spect, save_audio_sample, \
     rescale_spectrogram, make_output_folder
 
@@ -42,8 +43,8 @@ gan_opts = {'datapath': '', 'outf': '', 'birdname':'',
             'beta1': 0.5, 'cuda': True, 'ngpu': 1, 'nreslayers': 3, 'z_reg':False, 'mds_loss':False,
             'netG': '','netE': '','netD1':'','netD2':'','netD3':'', 'log_every': 300,
             'sample_rate': 16000.,'noise_dist': 'normal','z_var': 1.,'nfft': 256, 'get_audio': False,
-            'min_num_batches': 50, 'make_run_folder': False,
-            'manualSeed': [], 'do_pca': True, 'npca_samples': 1e6, 'npca_components': 256}
+            'min_num_batches': 50, 'make_run_folder': False, 'model_checkpoint_every': 3,
+            'manualSeed': [], 'do_pca': True, 'npca_samples': 1e6, 'npca_components': 0.98}
 
 hmm_opts = {'hidden_state_size' : [5, 10, 15, 20, 30, 50, 75, 100], 'covariance_type' : 'spherical', 
            'fit_params' : 'stmc', 'transmat_prior' : 1., 'n_iter' : 300, 'tolerance' : 0.01,
@@ -219,7 +220,7 @@ class Model:
                                     shuffle=True, num_workers=int(self.opts['workers']),
                                     drop_last = True)
 
-    def train_one_day(self, day, traindataloader):
+    def train_network(self, day, traindataloader):
         
         #losses
         minibatchLossD1 = []
@@ -233,6 +234,10 @@ class Model:
     
         # noise variable
         noise = torch.FloatTensor(self.opts['batchSize'], self.nz, 1,1).to(self.device)
+        
+        if self.opts['do_pca']:
+            Xpca = [] # will store some chunks
+            pca_model = None
         
         # training loop
         for epoch in range(self.opts['nepochs']):
@@ -349,6 +354,13 @@ class Model:
                 #    FID.append(fid)
                 FID.append(-1.)
                 
+                
+                if self.opts['do_pca']:
+                    if len(Xpca) < self.opts['npca_samples'] and pca_model is None:
+                        data = data.detach().cpu().numpy().squeeze()
+                        for d in data:
+                            Xpca.append(d)
+                        
                 # SAVE LOSSES
                 minibatchLossD1.append(float(err_d1.detach()))
                 minibatchLossD2.append(float(err_d2.detach()))
@@ -396,17 +408,28 @@ class Model:
                     
                     
             # do checkpointing of models
-            torch.save(self.netG.state_dict(), '%s/netG_epoch_%d_day_%d.pth'%(self.outpath,epoch,
-                                                                                day))
-            torch.save(self.netD1.state_dict(), '%s/netD1_epoch_%d_day_%d.pth' % (self.outpath,epoch,
-                                                                                day))
-            torch.save(self.netD2.state_dict(), '%s/netD2_epoch_%d_day_%d.pth' % (self.outpath,epoch,
-                                                                                day))
-            torch.save(self.netD3.state_dict(), '%s/netD3_epoch_%d_day_%d.pth' % (self.outpath,epoch,
-                                                                                day))
-            torch.save(self.netE.state_dict(), '%s/netE_epoch_%d_day_%d.pth' % (self.outpath, epoch,
-                                                                                day))
+            if epoch % opts['model_checkpoint_every']==0:
+                torch.save(self.netG.state_dict(), '%s/netG_epoch_%d_day_%d.pth'%(self.outpath,epoch,
+                                                                                    day))
+                torch.save(self.netD1.state_dict(), '%s/netD1_epoch_%d_day_%d.pth' % (self.outpath,epoch,
+                                                                                    day))
+                torch.save(self.netD2.state_dict(), '%s/netD2_epoch_%d_day_%d.pth' % (self.outpath,epoch,
+                                                                                    day))
+                torch.save(self.netD3.state_dict(), '%s/netD3_epoch_%d_day_%d.pth' % (self.outpath,epoch,
+                                                                                    day))
+                torch.save(self.netE.state_dict(), '%s/netE_epoch_%d_day_%d.pth' % (self.outpath, epoch,
+                                                                                    day))
             
+            if self.opts['do_pca']:
+                if len(Xpca) >= self.opts['npca_samples'] and pca_model is None:
+                    print('///// learning PCA model /////')
+                    pca_model = learn_pca_model(Xpca, self.opts['npca_components'], 
+                                                random_state = self.opts['manualSeed'])
+                    print('///// PCA model learned, %d components /////'%(pca_model.n_components_))
+                    Xpca = []
+                    gc.collect()
+                    joblib.dump({'pca_model':pca_model}, join(self.outpath,'pca_model.pkl'))
+                    
             
     def checkpoint(self, day, minibatch_idx, epoch) -> None:
         
@@ -460,21 +483,30 @@ class Model:
                     print('..audio buffer error, skipped audio file generation')
 
 
-    def get_loglikelihood(self, model, data, lengths):
-        return model.score(np.concatenate(data), lengths)
+    def get_loglikelihood(self, model, data, lengths, normalize_by_length=True):
+        LogL = 0.
+        for n in range(len(lengths)):
+            ll = model.score(data[n]) 
+            if normalize_by_length:
+                ll /= lengths[n]
+            LogL += ll
+        return LogL
 
-
+    def compute_latent_vectors(self):
+        if self.Z is None:
+            self.Z = [overlap_encode(x, self.netE, transform_sample=False,
+                                    imageW=self.opts['imageW'], 
+                                    noverlap = self.opts['noverlap'],
+                                    cuda=self.opts['cuda']) for x in self.X]
+            
     def train_hmm(self, day, hidden_size):
         
         # encode all spectrograms from that day
         if self.X is None:
             self.X = self.dataset.get(day, nsamps=-1)
             
-        if self.Z is None:
-            self.Z = [overlap_encode(x, self.netE, transform_sample=False,
-                                    imageW=self.opts['imageW'], 
-                                    noverlap = self.opts['noverlap'],
-                                    cuda=self.opts['cuda']) for x in self.X]
+        self.compute_latent_vectors()
+        
         # munge sequences
         if self.opts['munge']:
             self.Z = munge_sequences(self.Z, self.opts['munge_len'])
@@ -489,21 +521,24 @@ class Model:
 
         # get lengths of sequences
         Ltrain = [z.shape[0] for z in ztrain]
+        
         # train HMM 
         print('\n..... learning hmm with %d states .....'%(hidden_size))
         self.hmm = learnKmodels_getbest(ztrain, None, Ltrain, hidden_size, self.opts)
 
         # produce samples
         # compute 2 step full entropy
-        print('# computing model entropy #')
         Hsp, Htrans, Hgauss = full_entropy(self.hmm)
         print('..... Transition entropy = %.2f, Emission entropy = %.2f .....'%(Htrans, Hgauss))
         
         # compute test log likelihood
         Ltest = [z.shape[0] for z in ztest]
-        test_scores = self.get_loglikelihood(self.hmm, ztest, Ltest)
+        test_score = self.get_loglikelihood(self.hmm, ztest, Ltest, opts['normalize_logl'])
+        print('..... test likelihood = %.4f .....'%(test_score))
+        
         # compute train log likelihood
-        train_scores = self.get_loglikelihood(self.hmm, ztrain, Ltrain)
+        train_score = self.get_loglikelihood(self.hmm, ztrain, Ltrain, opts['normalize_logl'])
+        print('..... train likelihood = %.4f .....'%(train_score))
 
         # create 10 samples
         # concatenate the sequences because otherwise they are usually shorter than batch_size
@@ -564,6 +599,8 @@ parser.add_argument('--z_var', type = float, default = 1., help = 'variance of l
 parser.add_argument('--manualSeed', type=int, default=-1, help='random number generator seed')
 parser.add_argument('--lr_schedule', action = 'store_true', help='change learning rate')
 parser.add_argument('--log_every', type=int, default=300, help='make images and print loss every X batches')
+parser.add_argument('--do_pca', action='store_true', help='learn a PCA model if True')
+parser.add_argument('--npca_components', type=float, default=0.98, help='percent variance to be explained by PCA')
 parser.add_argument('--get_audio', action='store_true', help='write wav file from spectrogram')
 parser.add_argument('--cuda', action='store_true', help='use gpu')
 parser.add_argument('--start_from_day', type=int, default=0, help='which day to start learning from')
@@ -651,16 +688,24 @@ if __name__ == '__main__':
             continue
         
         # train networks
-        model.train_one_day(day, traindataloader)
+        model.train_network(day, traindataloader)
         
-        # then, train hmm
+        # encode spectrograms
+        model.compute_latent_vectors()
+        # get total number of data points in latent space
+        tot_pts = np.sum([z.shape[0] for z in model.Z])
+        
+        # then, train hmms, one per given hidden state size
         for k in range(len(opts['hidden_state_size'])):
             
-            if N < opts['hidden_state_size'][k]*opts['min_seq_multiplier']:
-                print('..... not enough sequences for learning an hmm .....')
+            K = opts['hidden_state_size'][k]
+            num_params = hmm_num_params(K, opts['nz'], covariance_type=opts['covariance_type'])
+            
+            if tot_pts < num_params:
+                print(f'..... too few data points to learn an hmm with {K} states skipping .....')
                 continue
                 
-            model.train_hmm(day, opts['hidden_state_size'][k])
+            model.train_hmm(day, K)
 
         # clear the saved spectrogram and latent vectors arrays
         model.X = None 

@@ -303,7 +303,28 @@ class bird_dataset(object):
         self.file.close()
         
 
+def hmm_num_params(nstates, ndim, covariance_type='diag'):
+    """How many learnable parameters are there in this hmm?"""
+    p = 0 # num parameters
+    # sum over n-1 startprobs
+    p = nstates - 1
+    # sum over n**2 transition probs
+    p += nstates**2
+    # sum up mean
+    p += nstates*ndim
+    # now covariance
+    if covariance_type=='diag':
+        p += nstates*ndim
+    elif covariance_type=='full':
+        p += nstates*ndim*ndim
+    elif covariance_type=='spherical':
+        p += nstates
+    else: # tied 
+        p += ndim*ndim
         
+    return p
+    
+    
 def create_output(model, outpath, hidden_size, idx, hmm_opts, netG, sequence=[]):
     """
         Creates hmm outputs via sampling, or simply reconstructions from the neural network.
@@ -366,15 +387,15 @@ def create_output(model, outpath, hidden_size, idx, hmm_opts, netG, sequence=[])
         plt.imshow(rescale_spectrogram(spect_out[0]), origin='lower', cmap = 'gray')
         # real sequence
         plt.savefig(os.path.join(outpath, 
-                             'reconstructed_sequence.eps'), dpi = 50, format='eps')
+                             'reconstructed_sequence.pdf'), dpi = 200, format='pdf')
         plt.close()
     else:
         for j in range(hmm_opts['nsamps']):
             plt.figure(figsize=(50,10))
             plt.imshow(rescale_spectrogram(spect_out[j]), origin='lower', cmap = 'gray')
             plt.savefig(os.path.join(outpath, 
-                                 'hiddenstatesize_'+str(hidden_size)+'_sample_'+str(j)+'.eps'), 
-                                     dpi = 50, format='eps')
+                                 'hiddenstatesize_'+str(hidden_size)+'_sample_'+str(j)+'.png'), 
+                                     dpi = 50, format='png')
             plt.close()
     # if audio is computed, save that 
     if hmm_opts['get_audio']:
