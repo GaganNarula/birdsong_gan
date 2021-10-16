@@ -259,11 +259,15 @@ def learnKmodels_getbest(data, lastmodel, Lengths, hidden_size, hmm_opts):
             logl = m.score(np.concatenate(data,axis=0), Lengths)
         except Exception as e:
             print(e)
+            pdb.set_trace()
             continue
             
         LL[k] = logl
         models.append(m)
     # choose model with highest LL
+    if len(LL)==0 or np.all(np.isnan(LL)):
+        return None
+    
     best = np.nanargmax(LL)
     return models[best]
 

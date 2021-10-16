@@ -16,29 +16,25 @@ import os
 
 
 def munge_sequences(seqs, minlen = 50):
-    """
-        To make sure that the statistics for covariance 
-        calculation are robust, elongate each sequence.
+    """To make sure that the statistics for covariance 
+        calculation are robust, elongate each sequence by concatenating
+        together consecutive sequences until a minimum length (minlen) is 
+        achieved.
     """
     seqs_out = []
     x = []
     for i in range(len(seqs)):
         
         tofill = int(minlen - np.sum([len(y) for y in x])) # how much time span left
+        
         if tofill <= 0:
-            # len will now be longer
-            x.append(seqs[i])
+            # length is now longer than required
             seqs_out.append(np.concatenate(x))
             x = []
-            continue
             
-        dur = seqs[i].shape[0] # assuming time is on first axis
         # if dur is less than what needs to be filled,
-        if dur <= tofill:
-            x.append(seqs[i])
-        else:
-            x.append(seqs[i][:tofill])
-    
+        x.append(seqs[i])
+        
     return seqs_out
 
 

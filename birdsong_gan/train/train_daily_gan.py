@@ -49,12 +49,12 @@ gan_opts = {'datapath': '', 'outf': '', 'birdname':'',
 hmm_opts = {'hidden_state_size' : [5, 10, 15, 20, 30, 50, 75, 100], 'covariance_type' : 'spherical', 
            'fit_params' : 'stmc', 'transmat_prior' : 1., 'n_iter' : 300, 'tolerance' : 0.01,
             'covars_prior' : 1., 'init_params' : 'kmeans',
-            'hmm_train_proportion' : 0.7, 'nsamplesteps' : 128, 'nsamps': 10,
+            'hmm_train_proportion' : 0.8, 'nsamplesteps' : 64, 'nsamps': 10,
             'sample_var': 0., 'sample_invtemperature' : 1.,
             'munge' : False, 'munge_len' : 50,
             'n_restarts': 1, 'do_chaining': False,
             'min_seq_multiplier': 5, 'cuda' : True, 'hmm_random_state' : 0,
-            'last_day': -1,
+            'last_day': -1, 'normalize_logl':True,
             'start_from_day' : 0,
             'get_audio': False
            }
@@ -490,27 +490,26 @@ class Model:
             if normalize_by_length:
                 ll /= lengths[n]
             LogL += ll
-        return LogL
+        return LogL / n
 
     def compute_latent_vectors(self):
-        if self.Z is None:
-            self.Z = [overlap_encode(x, self.netE, transform_sample=False,
-                                    imageW=self.opts['imageW'], 
-                                    noverlap = self.opts['noverlap'],
-                                    cuda=self.opts['cuda']) for x in self.X]
+        self.Z = [overlap_encode(x, self.netE, transform_sample=False,
+                                imageW=self.opts['imageW'], 
+                                noverlap = self.opts['noverlap'],
+                                cuda=self.opts['cuda']) for x in self.X]
+        # munge sequences
+        if self.opts['munge']:
+            self.Z = munge_sequences(self.Z, self.opts['munge_len'])
             
     def train_hmm(self, day, hidden_size):
         
         # encode all spectrograms from that day
         if self.X is None:
             self.X = self.dataset.get(day, nsamps=-1)
-            
-        self.compute_latent_vectors()
         
-        # munge sequences
-        if self.opts['munge']:
-            self.Z = munge_sequences(self.Z, self.opts['munge_len'])
-
+        if self.Z is None:
+            self.compute_latent_vectors()
+        
         # split into train and validation
         ids = np.random.permutation(len(self.Z))
         ntrain = int(self.opts['hmm_train_proportion'] * len(ids))
@@ -523,21 +522,25 @@ class Model:
         Ltrain = [z.shape[0] for z in ztrain]
         
         # train HMM 
-        print('\n..... learning hmm with %d states .....'%(hidden_size))
-        self.hmm = learnKmodels_getbest(ztrain, None, Ltrain, hidden_size, self.opts)
-
+        print('\n..... learning hmm with %d states on %d data points .....'%(hidden_size, np.sum(Ltrain)))
+        hmm = learnKmodels_getbest(ztrain, None, Ltrain, hidden_size, self.opts)
+        
+        if hmm is None:
+            print('..... probably too few data points to fit, skipping .....')
+            return
+        
         # produce samples
         # compute 2 step full entropy
-        Hsp, Htrans, Hgauss = full_entropy(self.hmm)
+        Hsp, Htrans, Hgauss = full_entropy(hmm)
         print('..... Transition entropy = %.2f, Emission entropy = %.2f .....'%(Htrans, Hgauss))
         
         # compute test log likelihood
         Ltest = [z.shape[0] for z in ztest]
-        test_score = self.get_loglikelihood(self.hmm, ztest, Ltest, opts['normalize_logl'])
+        test_score = self.get_loglikelihood(hmm, ztest, Ltest, opts['normalize_logl'])
         print('..... test likelihood = %.4f .....'%(test_score))
         
         # compute train log likelihood
-        train_score = self.get_loglikelihood(self.hmm, ztrain, Ltrain, opts['normalize_logl'])
+        train_score = self.get_loglikelihood(hmm, ztrain, Ltrain, opts['normalize_logl'])
         print('..... train likelihood = %.4f .....'%(train_score))
 
         # create 10 samples
@@ -552,25 +555,26 @@ class Model:
         ztosave = np.concatenate(ztosave, axis=0)
 
         # save samples
-        create_output(self.hmm, outputfolder, hidden_size, day, self.opts, self.netG, [])
+        create_output(hmm, outputfolder, hidden_size, day, self.opts, self.netG, [])
         # save real files
-        create_output(self.hmm, outputfolder, hidden_size, day, self.opts, self.netG, ztosave)
-        print('# generated samples #')
+        create_output(hmm, outputfolder, hidden_size, day, self.opts, self.netG, ztosave)
+        print('..... generated samples .....')
 
         # get number of active states etc
         # how many active states were there ? 
-        med_active, std_active = number_of_active_states_viterbi(self.hmm,
-                                                                    np.concatenate(ztrain), 
+        med_active, std_active = number_of_active_states_viterbi(hmm,np.concatenate(ztrain), 
                                                                     Ltrain)
+        print('..... median number of active states = %d .....'%(med_active))
+        
         # save model
-        joblib.dump({'train_score':train_scores, 'test_score': test_scores,
+        joblib.dump({'train_score':train_score, 'test_score': test_score,
                         'med_active':med_active,
                         'ztrain':ztrain,'ztest':ztest, 'std_active':std_active,
                         'ids_train':ids_train,
                         'ids_test':ids_test, 'Lengths_train':Ltrain,'Lengths_test':Ltest, 
                         'Entropies':[Hsp,Htrans,Hgauss]}, 
                         join(outputfolder, 'data_and_scores_day_'+str(day)+'.pkl'))
-        joblib.dump({'model':self.hmm}, join(outputfolder, 'model_day_'+str(day)+'.pkl'))
+        joblib.dump({'model':hmm}, join(outputfolder, 'model_day_'+str(day)+'.pkl'))
         
 
 
@@ -599,6 +603,7 @@ parser.add_argument('--z_var', type = float, default = 1., help = 'variance of l
 parser.add_argument('--manualSeed', type=int, default=-1, help='random number generator seed')
 parser.add_argument('--lr_schedule', action = 'store_true', help='change learning rate')
 parser.add_argument('--log_every', type=int, default=300, help='make images and print loss every X batches')
+parser.add_argument('--model_checkpoint_every', type=int, default=5, help='save network weights every x epochs')
 parser.add_argument('--do_pca', action='store_true', help='learn a PCA model if True')
 parser.add_argument('--npca_components', type=float, default=0.98, help='percent variance to be explained by PCA')
 parser.add_argument('--get_audio', action='store_true', help='write wav file from spectrogram')
@@ -619,8 +624,9 @@ parser.add_argument('--fit_params', type = str, default = 'stmc',
 parser.add_argument('--transmat_prior', type = float, default = 1., help = 'transition matrix prior concentration')
 parser.add_argument('--n_iter', type = int, default = 400, help = 'number of EM iterations')
 parser.add_argument('--tolerance', type = float, default = 0.01)
-parser.add_argument('--hmm_train_proportion', type=float, default=0.7, help='proportion of sequences to be used for hmm learning')
+parser.add_argument('--hmm_train_proportion', type=float, default=0.8, help='proportion of sequences to be used for hmm learning')
 parser.add_argument('--min_seq_multiplier', type = int ,default = 5, help='the number of files should be at least hidden size x this factor')
+parser.add_argument('--normalize_logl',action='store_true',help='if True, normalize the loglikelihood across time steps')
 parser.add_argument('--init_params', type = str, default = 'kmeans',
                     help='which variables to initialize, or to initialize with kmeans, enter kmeans')
 parser.add_argument('--munge', action = 'store_true', help='whether to concate')

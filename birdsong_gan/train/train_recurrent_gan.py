@@ -351,11 +351,11 @@ def train(model, traindataloader, testdataloader, opts):
                                                                                                                     train_fid[-1]))
 
                 # save spectrograms (only first)
-                gagan_save_spect('%s/input_spect_epoch_%03d_batchnumb_%d.eps'
+                gagan_save_spect('%s/input_spect_epoch_%03d_batchnumb_%d.png'
                                          % (opts['outf'], n, i), 
                                          rescale_spectrogram(x.detach().cpu().numpy()[0]))
                 
-                gagan_save_spect('%s/recon_spect_epoch_%03d_batchnumb_%d.eps'
+                gagan_save_spect('%s/recon_spect_epoch_%03d_batchnumb_%d.png'
                                          % (opts['outf'], n, i), 
                                          rescale_spectrogram(x_hat.detach().cpu().numpy()[0]))
                 
