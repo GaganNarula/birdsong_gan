@@ -22,6 +22,8 @@ from datetime import datetime
 import itertools
 import gc
 import pdb
+import json
+
 
 from configs.cfg import *
 from data.dataset import bird_dataset_single_hdf, transform, inverse_transform
@@ -664,10 +666,18 @@ if __name__ == '__main__':
 
     # make model
     model = Model(dataset, '', opts, None)
-    # make a save folder (run e.g. 2021-09-10_15_12_31)
+    
+    # make a save folder (run e.g. /opts['outf']/2021-09-10_15_12_31) if needed
     if opts['make_run_folder']:
         opts['outf'] = make_output_folder(opts['outf'])
-
+    else:
+        # just make the folder 
+        if not os.path.exists(opts['outf']):
+            os.makedirs(opts['outf'])
+        
+    with open(join(opts['outf'], 'opts.json'), 'w') as file:
+        json.dump(opts, file)
+        
     for day in range(opts['start_from_day'], ndays):
         
         print('\n\n.... ### WORKING ON DAY %d for bird %s ### .....'%(day, opts['birdname']))
