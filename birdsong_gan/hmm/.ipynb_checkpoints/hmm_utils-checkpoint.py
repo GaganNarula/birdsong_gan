@@ -261,10 +261,10 @@ def number_of_active_states_viterbi(model, seqs, lengths):
     # for each sample find the number of unique states
     unqs = [np.unique(s) for s in state_seqs]
     nunqs = np.array([len(u) for u in unqs])
-    # what is the median number of active states
-    med_active = np.mean(nunqs)
+    # what is the mean number of active states
+    mean_active = np.mean(nunqs)
     std_active = np.std(nunqs)
-    return med_active, std_active
+    return mean_active, std_active
     
     
     

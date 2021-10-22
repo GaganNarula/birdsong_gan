@@ -27,6 +27,8 @@ from configs.cfg import *
 from data.dataset import bird_dataset_single_hdf, transform, inverse_transform
 from models.nets_16col_residual import _netD, _netE, _netG, InceptionNet, weights_init
 
+from reconstruction_error.pca import learn_pca_model
+
 from hmm.hmm import learnKmodels_getbest
 from hmm.hmm_utils import munge_sequences, full_entropy, create_output, number_of_active_states_viterbi, hmm_num_params
 from utils.utils import overlap_encode, overlap_decode, gagan_save_spect, save_audio_sample, \
@@ -420,16 +422,15 @@ class Model:
                 torch.save(self.netE.state_dict(), '%s/netE_epoch_%d_day_%d.pth' % (self.outpath, epoch,
                                                                                     day))
             
-            if self.opts['do_pca']:
-                if len(Xpca) >= self.opts['npca_samples'] and pca_model is None:
-                    print('///// learning PCA model /////')
-                    pca_model = learn_pca_model(Xpca, self.opts['npca_components'], 
-                                                random_state = self.opts['manualSeed'])
-                    print('///// PCA model learned, %d components /////'%(pca_model.n_components_))
-                    Xpca = []
-                    gc.collect()
-                    joblib.dump({'pca_model':pca_model}, join(self.outpath,'pca_model.pkl'))
-                    
+            if self.opts['do_pca'] and pca_model is None:
+                print('///// learning PCA model /////')
+                pca_model = learn_pca_model(Xpca, self.opts['npca_components'], 
+                                            random_state = self.opts['manualSeed'])
+                print('///// PCA model learned, %d components /////'%(pca_model.n_components_))
+                Xpca = []
+                gc.collect()
+                joblib.dump({'pca_model':pca_model}, join(self.outpath,'pca_model.pkl'))
+
             
     def checkpoint(self, day, minibatch_idx, epoch) -> None:
         
