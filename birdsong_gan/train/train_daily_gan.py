@@ -209,17 +209,7 @@ class Model:
         # make tensor dataset
         TD, _ = self.dataset.make_chunk_tensor_dataset(day, imageW=self.opts['imageW'],
                                                             shuffle_chunks=True)
-            
-        if not os.path.exists(join(self.outpath, 'sequences.pkl')):
-            self.X = self.dataset.get(day, nsamps=-1)
-            # save the X array 
-            joblib.dump({'X': self.X}, join(self.outpath, 'sequences.pkl'))
-            
-        else:
-            # load the saved sequences array
-            self.X = joblib.load(join(self.outpath, 'sequences.pkl'))
-            self.X = self.X['X']
-            
+        self.X = self.dataset.get(day, nsamps=-1)
         return DataLoader(TD, batch_size= self.opts['batchSize'], sampler = None,
                                     shuffle=True, num_workers=int(self.opts['workers']),
                                     drop_last = True)
