@@ -569,7 +569,7 @@ class Model:
                         join(outputfolder, 'data_and_scores_day_'+str(day)+'.pkl'))
         joblib.dump({'model':hmm}, join(outputfolder, 'model_day_'+str(day)+'.pkl'))
         
-
+    
 
         
 
