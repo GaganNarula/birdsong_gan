@@ -48,7 +48,8 @@ gan_opts = {'datapath': '', 'outf': '', 'birdname':'',
             'netG': '','netE': '','netD1':'','netD2':'','netD3':'', 'log_every': 300,
             'sample_rate': 16000.,'noise_dist': 'normal','z_var': 1.,'nfft': 256, 'get_audio': False,
             'min_num_batches': 50, 'make_run_folder': False, 'model_checkpoint_every': 3,
-            'manualSeed': [], 'do_pca': True, 'npca_samples': 1e6, 'npca_components': 0.98}
+            'manualSeed': [], 'do_pca': True, 'npca_samples': 1e6, 'npca_components': 0.98,
+           'get_FID_score': False, 'train_all_days': False}
 
 hmm_opts = {'hidden_state_size' : [5, 10, 15, 20, 30, 50, 75, 100], 'covariance_type' : 'spherical', 
            'fit_params' : 'stmc', 'transmat_prior' : 1., 'n_iter' : 300, 'tolerance' : 0.01,
@@ -205,7 +206,7 @@ class Model:
         self.schedulerD2.step()
         self.schedulerD3.step()
         
-    def make_dataloader(self, day=0):
+    def make_daily_dataloader(self, day=0):
         # make tensor dataset
         TD, _ = self.dataset.make_chunk_tensor_dataset(day, imageW=self.opts['imageW'],
                                                             shuffle_chunks=True)
@@ -213,8 +214,13 @@ class Model:
         return DataLoader(TD, batch_size= self.opts['batchSize'], sampler = None,
                                     shuffle=True, num_workers=int(self.opts['workers']),
                                     drop_last = True)
-
-    def train_network(self, day, traindataloader):
+    
+    def make_single_dataloader(self):
+        return DataLoader(self.dataset, batch_size= self.opts['batchSize'], sampler = None,
+                                    shuffle=True, num_workers=int(self.opts['workers']),
+                                    drop_last = True)
+    
+    def train_network(self, traindataloader, day=None):
         
         #losses
         minibatchLossD1 = []
@@ -337,16 +343,18 @@ class Model:
                 self.optimizerD3.step()
 
                 # compute fid score
-                #with torch.no_grad():#
+                if self.opts['get_FID_score']:
+                    with torch.no_grad():#
 
-                #    if self.opts['noise_dist'] == 'normal':
-                #        noise.normal_(0., self.opts['z_var'])
-                #    else:
-                #        noise.uniform_(-self.opts['z_var'],self.opts['z_var'])
-                #    fake = self.netG(noise)
-                #    fid = self.netD3.fid_score(data.detach(), fake.detach())
-                #    FID.append(fid)
-                FID.append(-1.)
+                        if self.opts['noise_dist'] == 'normal':
+                            noise.normal_(0., self.opts['z_var'])
+                        else:
+                            noise.uniform_(-self.opts['z_var'],self.opts['z_var'])
+                        fake = self.netG(noise)
+                        fid = self.netD3.fid_score(data.detach(), fake.detach())
+                        FID.append(fid)
+                else:
+                    FID.append(-1.)
                 
                 
                 if self.opts['do_pca']:
@@ -583,6 +591,7 @@ parser.add_argument('--chain_networks', action='store_true', help='whether to in
 parser.add_argument('--batchSize', type=int, default=128, help='input batch size')
 parser.add_argument('--nz', type=int, default=32, help='size of the latent z vector')
 parser.add_argument('--train_residual', action = 'store_true')
+parser.add_argument('--train_all_days', action = 'store_true', help='if True, trains single net on all spectrograms from all days')
 parser.add_argument('--make_run_folder', action = 'store_true', help='if True, will create a run folder to save results')
 parser.add_argument('--noise_dist', type=str, default = 'normal', help='noise distribution: {normal, uniform, t}')
 parser.add_argument('--lambdaa', type = float, default = 100., help = 'weighting for recon loss')
@@ -597,6 +606,7 @@ parser.add_argument('--manualSeed', type=int, default=-1, help='random number ge
 parser.add_argument('--lr_schedule', action = 'store_true', help='change learning rate')
 parser.add_argument('--log_every', type=int, default=300, help='make images and print loss every X batches')
 parser.add_argument('--model_checkpoint_every', type=int, default=5, help='save network weights every x epochs')
+parser.add_argument('--get_FID_score', action='store_true', help='whether to compute FID score')
 parser.add_argument('--do_pca', action='store_true', help='learn a PCA model if True')
 parser.add_argument('--npca_components', type=float, default=0.98, help='percent variance to be explained by PCA')
 parser.add_argument('--get_audio', action='store_true', help='write wav file from spectrogram')
@@ -628,7 +638,7 @@ parser.add_argument('--munge_len', type = int, default = 50, help = 'minimum len
 
 
 
-if __name__ == '__main__':
+def main():
 
     
     args = parser.parse_args()
@@ -664,9 +674,17 @@ if __name__ == '__main__':
         # just make the folder 
         if not os.path.exists(opts['outf']):
             os.makedirs(opts['outf'])
+    
+    model.outpath = opts['outf']
         
     with open(join(opts['outf'], 'opts.json'), 'w') as file:
         json.dump(opts, file)
+        
+        
+    if opts['train_all_days']:
+        # train on all days from this bird
+        traindataloader = model.make_single_dataloader()
+        model.train_network(traindataloader)
         
     for day in range(opts['start_from_day'], ndays):
         
@@ -682,20 +700,22 @@ if __name__ == '__main__':
         model.outpath = outpath
 
         # re-initialize networks
-        if day > 0 and not opts['chain_networks']:
+        if day > 0 and not opts['chain_networks'] and not opts['train_all_days']:
             model._init_networks()
 
-        # make traindataloader
-        traindataloader = model.make_dataloader(day)
-        N = len(model.X)
-        print('..... %d sequences on this day .....'%(N))
         
-        if len(traindataloader) < opts['min_num_batches']:
-            print('..... NOT ENOUGH MINIBATCHES FOR NEURAL NET .....')
-            continue
-        
-        # train networks
-        model.train_network(day, traindataloader)
+        if not opts['train_all_days']:
+            # make daily traindataloader
+            traindataloader = model.make_daily_dataloader(day)
+            N = len(model.X)
+            print('..... %d sequences on this day .....'%(N))
+
+            if len(traindataloader) < opts['min_num_batches']:
+                print('..... NOT ENOUGH MINIBATCHES FOR NEURAL NET .....')
+                continue
+
+            # train networks
+            model.train_network(traindataloader, day)
         
         # encode spectrograms
         model.compute_latent_vectors()
@@ -718,5 +738,10 @@ if __name__ == '__main__':
         model.X = None 
         model.Z = None
         
+    model.dataset.close()
+   
+
 
     
+if __name__ == '__main__':
+    main()

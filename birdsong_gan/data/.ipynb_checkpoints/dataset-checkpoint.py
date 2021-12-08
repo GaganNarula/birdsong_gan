@@ -490,7 +490,7 @@ class bird_dataset(object):
         
         
 
-class bird_dataset_single_hdf(object):
+class bird_dataset_single_hdf(data.Dataset):
     '''Like bird_dataset but works on a single hdf object containing all 
         different birds' data.
 
@@ -498,9 +498,10 @@ class bird_dataset_single_hdf(object):
         from a single bird. No data.Dataset subclass. This class is
         used for analysis, spectrogram display or hmm learning.
     '''
-    def __init__(self, path2hdf, birdname):
+    def __init__(self, path2hdf, birdname, imageW=16):
         
         self.bird = birdname
+        self.imageW = imageW
         self.file = h5py.File(path2hdf,'r')
         # filter out this birds files
         self.filtered_keys = self._filter_for_bird()
@@ -527,9 +528,25 @@ class bird_dataset_single_hdf(object):
         dayname = self.day_names[day]
         return list(filter(lambda x: dayname in x, self.filtered_keys))
     
-    def get(self, day=0, nsamps=-1):
+    def __len__(self):
+        return len(self.filtered_keys)
+    
+    def __getitem__(self, item):
+        # get an item from any day in the dataset
+        fname = self.filtered_keys[item]
+        # spectrogram
+        seq = transform(np.array(self.file.get(fname)))
+        # get random chunk of it 
+        X = random_crop(seq, width=self.imageW)
+        return torch.from_numpy(X).float(), torch.zeros(1)
+        
+    def get(self, day=None, nsamps=-1):
         ''' get "nsamps" spectrograms from day number "day" ''' 
-        files = self._filter_files(day)
+        if day is not None:
+            files = self._filter_files(day)
+        else:
+            files = self.filtered_keys
+            
         nfiles = len(files)
         # choose nsamp random files
         if nsamps == -1:
