@@ -231,7 +231,12 @@ class Model:
         minibatchLossD3 = []
         minibatchLossZreg = []
         FID = []
-    
+        
+        if day is None:
+            dayy = 'all'
+        else:
+            dayy = str(day)
+            
         # noise variable
         noise = torch.FloatTensor(self.opts['batchSize'], self.nz, 1,1).to(self.device)
         
@@ -411,16 +416,17 @@ class Model:
                     
             # do checkpointing of models
             if epoch % opts['model_checkpoint_every']==0:
-                torch.save(self.netG.state_dict(), '%s/netG_epoch_%d_day_%d.pth'%(self.outpath,epoch,
-                                                                                    day))
-                torch.save(self.netD1.state_dict(), '%s/netD1_epoch_%d_day_%d.pth' % (self.outpath,epoch,
-                                                                                    day))
-                torch.save(self.netD2.state_dict(), '%s/netD2_epoch_%d_day_%d.pth' % (self.outpath,epoch,
-                                                                                    day))
-                torch.save(self.netD3.state_dict(), '%s/netD3_epoch_%d_day_%d.pth' % (self.outpath,epoch,
-                                                                                    day))
-                torch.save(self.netE.state_dict(), '%s/netE_epoch_%d_day_%d.pth' % (self.outpath, epoch,
-                                                                                    day))
+                
+                torch.save(self.netG.state_dict(), '%s/netG_epoch_%d_day_%s.pth'%(self.outpath,epoch,
+                                                                                    dayy))
+                torch.save(self.netD1.state_dict(), '%s/netD1_epoch_%d_day_%s.pth' % (self.outpath,epoch,
+                                                                                    dayy))
+                torch.save(self.netD2.state_dict(), '%s/netD2_epoch_%d_day_%s.pth' % (self.outpath,epoch,
+                                                                                    dayy))
+                torch.save(self.netD3.state_dict(), '%s/netD3_epoch_%d_day_%s.pth' % (self.outpath,epoch,
+                                                                                    dayy))
+                torch.save(self.netE.state_dict(), '%s/netE_epoch_%d_day_%s.pth' % (self.outpath, epoch,
+                                                                                    dayy))
             
             if self.opts['do_pca'] and pca_model is None:
                 print('///// learning PCA model /////')
@@ -493,7 +499,14 @@ class Model:
             LogL += ll
         return LogL / n
 
-    def compute_latent_vectors(self):
+    def compute_latent_vectors(self, day):
+        
+        if self.X is None:
+            self.X = self.dataset.get(day, nsamps=-1)
+        
+        if len(self.X) == 0:
+            return 
+        
         self.Z = [overlap_encode(x, self.netE, transform_sample=False,
                                 imageW=self.opts['imageW'], 
                                 noverlap = self.opts['noverlap'],
@@ -505,11 +518,8 @@ class Model:
     def train_hmm(self, day, hidden_size):
         
         # encode all spectrograms from that day
-        if self.X is None:
-            self.X = self.dataset.get(day, nsamps=-1)
-        
         if self.Z is None:
-            self.compute_latent_vectors()
+            self.compute_latent_vectors(day)
         
         # split into train and validation
         ids = np.random.permutation(len(self.Z))
@@ -663,7 +673,10 @@ def main():
     dataset = bird_dataset_single_hdf(opts['datapath'], opts['birdname'])
     # how many days are there ? 
     ndays = dataset.ndays
-
+    if ndays==0:
+        print('..... no data for this bird, exiting .....')
+        return
+    
     # make model
     model = Model(dataset, '', opts, None)
     
@@ -705,6 +718,7 @@ def main():
 
         
         if not opts['train_all_days']:
+            
             # make daily traindataloader
             traindataloader = model.make_daily_dataloader(day)
             N = len(model.X)
@@ -716,9 +730,14 @@ def main():
 
             # train networks
             model.train_network(traindataloader, day)
+         
+        # compute and encode spectrograms 
+        model.compute_latent_vectors(day)
         
-        # encode spectrograms
-        model.compute_latent_vectors()
+        if len(model.X) == 0:
+            print('..... no data on this day, skipping .....')
+            continue
+            
         # get total number of data points in latent space
         tot_pts = np.sum([z.shape[0] for z in model.Z])
         
@@ -729,7 +748,7 @@ def main():
             num_params = hmm_num_params(K, opts['nz'], covariance_type=opts['covariance_type'])
             
             if tot_pts < num_params:
-                print(f'..... too few data points to learn an hmm with {K} states skipping .....')
+                print(f'..... too few data points to learn an hmm with {K} states, skipping to next.....')
                 continue
                 
             model.train_hmm(day, K)
