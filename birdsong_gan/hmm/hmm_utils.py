@@ -119,6 +119,7 @@ class Latent_loader(object):
         return Zsample
 
     
+    
 class songbird_data_sample(object):
     def __init__(self, path2idlist, external_file_path):
         with open(path2idlist, 'rb') as f:
@@ -148,6 +149,7 @@ class songbird_data_sample(object):
         X = [self.__getitem__(i)[0] for i in ids]
         return X
 
+    
     
 def average_entropy(T):
     E = []
