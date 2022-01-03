@@ -60,7 +60,7 @@ hmm_opts = {'hidden_state_size' : [5, 10, 15, 20, 30, 50, 75, 100], 'covariance_
             'n_restarts': 1, 'do_chaining': False,
             'min_seq_multiplier': 5, 'cuda' : True, 'hmm_random_state' : 0,
             'last_day': -1, 'normalize_logl':True,
-            'start_from_day' : 0,
+            'start_from_day' : 0, 'end_at': -1,
             'get_audio': False
            }
 
@@ -540,11 +540,6 @@ class Model:
             print('..... probably too few data points to fit, skipping .....')
             return
         
-        # produce samples
-        # compute 2 step full entropy
-        Hsp, Htrans, Hgauss = full_entropy(hmm)
-        print('..... Transition entropy = %.2f, Emission entropy = %.2f .....'%(Htrans, Hgauss))
-        
         # compute test log likelihood
         Ltest = [z.shape[0] for z in ztest]
         test_score = self.get_loglikelihood(hmm, ztest, Ltest, opts['normalize_logl'])
@@ -569,22 +564,20 @@ class Model:
         create_output(hmm, outputfolder, hidden_size, day, self.opts, self.netG, [])
         # save real files
         create_output(hmm, outputfolder, hidden_size, day, self.opts, self.netG, ztosave)
-        print('..... generated samples .....')
-
-        # get number of active states etc
-        # how many active states were there ? 
-        med_active, std_active = number_of_active_states_viterbi(hmm,np.concatenate(ztrain), 
-                                                                    Ltrain)
-        print('..... median number of active states = %d .....'%(med_active))
+        print('..... generated samples and reconstruction .....')
         
         # save model
-        joblib.dump({'train_score':train_score, 'test_score': test_score,
-                        'med_active':med_active,
-                        'ztrain':ztrain,'ztest':ztest, 'std_active':std_active,
-                        'ids_train':ids_train,
-                        'ids_test':ids_test, 'Lengths_train':Ltrain,'Lengths_test':Ltest, 
-                        'Entropies':[Hsp,Htrans,Hgauss]}, 
-                        join(outputfolder, 'data_and_scores_day_'+str(day)+'.pkl'))
+        joblib.dump({'train_score':train_score,
+                     'test_score': test_score,
+                     'ztrain':ztrain,'ztest':ztest,
+                     'ids_train':ids_train,
+                     'ids_test':ids_test,
+                     'Lengths_train':Ltrain,
+                     'Lengths_test':Ltest
+                    },
+                     join(outputfolder, 'data_and_scores_day_' + str(day) + '.pkl')
+                   )
+        
         joblib.dump({'model':hmm}, join(outputfolder, 'model_day_'+str(day)+'.pkl'))
         
     
@@ -622,6 +615,7 @@ parser.add_argument('--npca_components', type=float, default=0.98, help='percent
 parser.add_argument('--get_audio', action='store_true', help='write wav file from spectrogram')
 parser.add_argument('--cuda', action='store_true', help='use gpu')
 parser.add_argument('--start_from_day', type=int, default=0, help='which day to start learning from')
+parser.add_argument('--end_at', type=int, default=-1, help='which day to end hmm learning at')
 parser.add_argument('--netE',type = str, default = '', help='path to encoder network file')
 parser.add_argument('--netG',type = str, default = '', help='path to generator network file')
 parser.add_argument('--netD1',type = str, default = '', help='path to disc 1 network file')
@@ -677,6 +671,11 @@ def main():
         print('..... no data for this bird, exiting .....')
         return
     
+    end_at = ndays
+    if opts['end_at'] > 0:
+        end_at = opts['end_at']
+    
+    
     # make model
     model = Model(dataset, '', opts, None)
     
@@ -699,7 +698,8 @@ def main():
         traindataloader = model.make_single_dataloader()
         model.train_network(traindataloader)
         
-    for day in range(opts['start_from_day'], ndays):
+        
+    for day in range(opts['start_from_day'], end_at):
         
         print('\n\n.... ### WORKING ON DAY %d for bird %s ### .....'%(day, opts['birdname']))
         
@@ -757,6 +757,25 @@ def main():
         model.X = None 
         model.Z = None
         
+        
+    
+    # last is tutor
+    print('..... now learning tutor model .....')
+    model.compute_latent_vectors(day = 'tutor')
+    
+    for k in range(len(opts['hidden_state_size'])):
+            
+        K = opts['hidden_state_size'][k]
+        num_params = hmm_num_params(K, opts['nz'], covariance_type=opts['covariance_type'])
+
+        if tot_pts < num_params:
+            print(f'..... too few data points to learn an hmm with {K} states, skipping to next.....')
+            continue
+            
+        model.train_hmm('tutor', K)
+        
+
+    
     model.dataset.close()
    
 
