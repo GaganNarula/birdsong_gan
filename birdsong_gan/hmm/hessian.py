@@ -102,7 +102,7 @@ def logLLcalculation_scaled_noredudantA(x, mu, varss, A, pi, B, T = 1, cuda=Fals
     """
     if not isinstance(x, torch.Tensor):
         x = torch.from_numpy(x).float()
-        if cuda: x = x.cuda
+        if cuda: x = x.cuda()
 
     K = mu.shape[0] # num states
     D = mu.shape[1] # num dims
@@ -115,11 +115,13 @@ def logLLcalculation_scaled_noredudantA(x, mu, varss, A, pi, B, T = 1, cuda=Fals
         if cuda:
             V = V.cuda()
         V = varss[k]*V
+        
         P = Tmvn(mu[k], V).log_prob(x[0]).exp()
         if k < K-1:
             alpha.append((pi[k] * P).view(1))
         else:
             alpha.append((lastpi * P).view(1))
+            
     alpha = torch.cat(alpha)
     c = torch.sum(alpha)
     alphahat = alpha / c
@@ -184,7 +186,7 @@ def create_hess_mat_sphericalvar_symm_noredundant(H, ndim = 16, nstates = 5):
     row_start = 0
     col1 = 0
     
-    ##### NOW COV #####
+    ##### NOW COV #####f
     # covs vs means
     Hcov = H[1]
     for k in range(nstates):
