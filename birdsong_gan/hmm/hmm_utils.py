@@ -164,13 +164,46 @@ def average_entropy(T):
     return E.mean()
 
 
-def gauss_entropy(model,k):
-    # get kth covariance
-    cov = model.covars_[k]
-    D = cov.shape[-1]
-    H = (D/2)*np.log(2*np.pi*np.exp(1.))
-    H += 0.5*np.log(np.linalg.det(cov))
+def gauss_entropy(model: GaussianHMM, k: int) -> float:
+    """Multivariate Gaussian entropy in bits
+    """
+    H = (model.covars_[k].shape[-1]/2) * (1. + np.log2(2*np.pi))
+    
+    H += 0.5 * np.log2(np.linalg.det(model.covars_[k]))
     return H
+
+
+def full_entropy_1step(model):
+    """Calculate entropy of an HMM by separately calculating
+        entropy of all three parts : start prob, transition matrix, 
+        Gaussian emissions. All entropy values are base 2 (bits)
+    """
+    # this means you need to add first the entropy of start
+    # prob
+    Hsp = entropy(model.startprob_, base = 2)
+    
+    # for transition matrix, need a nested for loop
+    # this is step 1
+    Htrans = 0.
+    for k in range(model.n_components):
+        
+        # for each row of the transition matrix compute entropy, then
+        # average over rows
+        Htrans += entropy(model.transmat_[k,:], base = 2)
+        
+    # average 
+    Htrans /= model.n_components
+    
+    # for Gaussian
+    # first get the 
+    Hgauss = 0.
+    for k in range(model.n_components):
+        
+        Hgauss += gauss_entropy(model, k)
+    Hgauss /= model.n_components
+    
+    return  Hsp, Htrans, Hgauss
+
 
 
 def full_entropy(model):
@@ -203,7 +236,6 @@ def full_entropy(model):
         for j in range(model.n_components):
             Hg += model.transmat_[k,j] * gauss_entropy(model,j)
         Hgauss += p_z1 * Hg # minus sign is absorbed into gauss_entropy function
-    Hgauss *= np.log2(np.exp(1.)) # to bits
     
     return  Hsp, Htrans, Hgauss
 
