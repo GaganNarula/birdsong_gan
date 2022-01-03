@@ -171,8 +171,7 @@ class songbird_dataset(data.Dataset):
     
 
 class songbird_contiguous_dataset(data.Dataset):
-    '''
-        Extracts a contiguous set of spectrogram chunks for training
+    '''Extracts a contiguous set of spectrogram chunks for training
     '''
     def __init__(self, path2idlist, imageW=16, external_file_path=[],
                  subset_age = None, batchSize=64, minlen = None):
@@ -524,10 +523,13 @@ class bird_dataset_single_hdf(data.Dataset):
                 day_names.append(match.group())
         return sorted(list(set(day_names)))
 
-    def _filter_files(self, day=0):
-        dayname = self.day_names[day]
+    def _filter_files(self, day):
+        if day=='tutor':
+            dayname = 'tutor'
+        else:
+            dayname = self.day_names[day]
         return list(filter(lambda x: dayname in x, self.filtered_keys))
-    
+
     def __len__(self):
         return len(self.filtered_keys)
     
