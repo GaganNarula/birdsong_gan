@@ -1,6 +1,6 @@
 import numpy as np
 from hmmlearn.hmm import GaussianHMM
-from .hmm_utils import tempered_sampling
+from hmm_utils import tempered_sampling, full_entropy_1step
 import argparse
 import joblib
 from joblib import Parallel, delayed
@@ -14,7 +14,11 @@ from glob import glob
 
 
 
-def get_samples(model, nsteps = 100, nsamps = 10000, sample_var=None, beta=1.):
+def get_samples(model,
+                nsteps: int=100,
+                nsamps: int=10000,
+                sample_var: float=None,
+                beta: float=1.):
     
     # variance of sampling
     if sample_var is None:
@@ -22,12 +26,14 @@ def get_samples(model, nsteps = 100, nsamps = 10000, sample_var=None, beta=1.):
     else:
         sample_variance = sample_var
         
-    samples = Parallel(n_jobs=-2)(delayed(tempered_sampling)(model, beta=beta,
+    samples = Parallel(n_jobs=-2)(delayed(tempered_sampling)(model,
+                                                             beta=beta,
                                                              timesteps=nsteps,
                                                              sample_obs=True,
                                                              start_state_max=True,
-                                                            sample_var=sample_variance) for i in range(nsamps))
-    samples = [s[0] for s in samples]
+                                                            sample_var=sample_variance)[0] \
+                                  for i in range(nsamps))
+
     return samples
 
 
@@ -39,12 +45,15 @@ def get_scores(model, samples):
 
 def get_normalized_scores(model, seqs, normalize_by_length=True):
     LogL = 0.
-    for n in range(len(lengths)):
-        ll = model.score(seq[n]) 
+    for n in range(len(seqs)):
+        
+        ll = model.score(seqs[n]) 
+        
         if normalize_by_length:
-            ll /= lengths[n]
+            ll /= seqs[n].shape[0]
+            
         LogL += ll
-    return LogL / n
+    return LogL / len(seqs)
 
 
 def get_divergence(P, Q, samples_P=None, samples_Q=None, nsteps=100,
@@ -80,15 +89,18 @@ def get_divergence(P, Q, samples_P=None, samples_Q=None, nsteps=100,
         
         DKL_symm: float, Symmetric Jeffrey's divergence: 0.5*(DKL(P|Q) + DKL(Q|P))     
         
+        logP_P : float, neg entropy of model P
+        logQ_P : float, cross entropy with samples from model P
+        logP_
     """
     if samples_P is None:
         samples_P = get_samples(P, nsteps, nsamps,
-                                random_state, sample_var
+                                random_state, sample_var,
                                 beta)
         
     if samples_Q is None:
         samples_Q = get_samples(Q, nsteps, nsamps,
-                                random_state, sample_var
+                                random_state, sample_var,
                                 beta)
         
     logP_P = get_normalized_scores(P, samples_P)
@@ -100,19 +112,19 @@ def get_divergence(P, Q, samples_P=None, samples_Q=None, nsteps=100,
     DKL_Q_P = logQ_Q - logP_Q
     DKL_symm = 0.5*(DKL_P_Q + DKL_Q_P)
     
-    return DKL_P_Q, DKL_Q_P, DKL_symm
+    return DKL_P_Q, DKL_Q_P, DKL_symm, logP_P, logQ_P, logQ_Q, logP_Q
 
     
     
-def load_hmm_model(model_outer_path, hidden_state_size):
-    modelpaths = glob(join(model_outer_path, 'hmm_hiddensize*'))
-    modelpath = [path for path in modelpaths if str(hidden_state_size) in path][0]
+def load_hmm_model(model_outer_path: str, hidden_state_size: str):
+    modelpath = join(model_outer_path, 'hmm_hiddensize_' + hidden_state_size)
+    modelpath = glob(join(modelpath, 'model_*'))[0]
     model = joblib.load(modelpath)
     return model['model']
 
 
-def load_sequence_data(data_path):
-    data_pkl_path = glob(join(data_path, 'data*'))[0]
+def load_sequence_data(data_path: str):
+    data_pkl_path = glob(join(data_path, 'data_and_scores*'))[0]
     data = joblib.load(data_pkl_path)
     ztrain = data['ztrain']
     ztest = data['ztest']
@@ -125,81 +137,103 @@ def compute_divergence_curve(opts):
     
     # how many models are there?
     days = glob(join(opts['birdpath'], 'day_*'))
-    ndays = len(days)
     
+    ndays = len(days)
+    # sort them by number 
+    day_ids = [int(d.split('_')[-1]) for d in days]
+    day_ids = np.argsort(day_ids)
+    days = [days[i] for i in day_ids]
+
     if ndays == 0:
         return
-    
-    days = sorted(days)
     
     # which one is tutor model? Last one by default
     
     if opts['tutor_hmm_model'] is None:
         tutorday = days[-1]
         
-    K = len(opts['hmm_state_sizes'])
     
-    KLD_tut_pup = np.zeros((ndays, K))
-    KLD_pup_tut = np.zeros((ndays, K))
-    JFD = np.zeros((ndays, K))
+    # variables
+    KLD_tut_pup = [None for _ in range(ndays)]
+    KLD_pup_tut = [None for _ in range(ndays)]
+    logLscores = [None for _ in range(ndays)]
+    JFD = [None for _ in range(ndays)]
     
     # extra, for analysis
     total_duration = np.zeros(ndays)
-    # 
-    model_entropy = np.zeros((ndays, K, 3))
+    model_entropies = [None for _ in range(ndays)]
         
-    for k in range(K):
+    # cycle over days
+    for d in range(ndays):
         
-        # get the tutor model
-        tutormodel = load_hmm_model(tutorday, k)
+        # find the different hidden state sizes
+        modelpaths = glob(join(days[d], 'hmm_hiddensize*'))
         
-        # get several sample trajectories from tutormodel
-        if opts['divergence_from_samples']:
-            tutsamples = get_samples(tutmodel, opts['nsteps'],
-                                     opts['nsamps'],
-                                     sample_var=opts['sample_variance'],
-                                     beta=opts['sample_invtemp'])
+        hidden_state_sizes = [p.split('_')[-1] for p in modelpaths]
+        nstates = len(hidden_state_sizes)
+        
+        KLD_tut_pup[d] = {}
+        KLD_pup_tut[d] = {}
+        JFD[d] = {}
+        model_entropies[d] = {}
+        logLscores[d] = {}
+        
+        
+        for k in hidden_state_sizes:
+        
+            print('\n..... evaluating day %d , hmm state size %s .....'%(d, k))
             
-        else:
-            tutsamples, _ = load_sequence_data(tutorday)
-
-        # cycle over days
-        for d in range(ndays):
-            
-            print(' ..... evaluating day %d , hmm state size %d .....'%(d, k))
-            
+            # get the tutor model
+            tutormodel = load_hmm_model(tutorday, k)  
+        
+            # get the pupil model
             pupmodel = load_hmm_model(days[d], k)
             
-            if opts['divergence_from_samples']:
-                pupsamples = get_samples(tutmodel, opts['nsteps'],
-                                     opts['nsamps'],
-                                     sample_var=opts['sample_variance'],
-                                     beta=opts['sample_invtemp'])
+            
+            if not opts['divergence_from_samples']:
+                pupsamples, entropies = load_sequence_data(join(days[d], 'hmm_hiddensize_' + k))
                 
-                entropies = full_entropy(pupmodel)
-                
+                tutsamples, _ = load_sequence_data(join(tutorday,  'hmm_hiddensize_' + k))
+                                                           
             else:
-                pupsamples, entropies = load_sequence_data(days[d])
+                # sample pupil and tutor models
+                
+                pupsamples = get_samples(tutormodel, opts['nsteps'],
+                                         opts['nsamps'],
+                                         sample_var=opts['sample_variance'],
+                                         beta=opts['sample_invtemp'])
+                
+                tutsamples = get_samples(tutormodel, opts['nsteps'],
+                                         opts['nsamps'],
+                                         sample_var=opts['sample_variance'],
+                                         beta=opts['sample_invtemp'])
+                
+            
+            entropies = full_entropy_1step(pupmodel)
+            # record entropies
+            model_entropies[d][k] = entropies
             
             # record singing duration (in counts of frames)
             total_duration[d] = np.sum([x.shape[0] for x in pupsamples])
             
-            # record entropies
-            model_entropy[d,k,:] = entropies
-            
-            KLD_tut_pup[d,k], KLD_pup_tut[d,k], JFD[d,k] = get_divergence(P, Q,
-                                                                          samples_P=tutsamples,
-                                                                          samples_Q=pupsamples,
-                                                                          nsteps=opts['nsteps'],
-                                                                          beta=opts['sample_invtemp'],
-                                                                          sample_var=opts['sample_variance'])
+            DKL_P_Q, DKL_Q_P, DKL_symm, logP_P, logQ_P, log_Q_Q, logP_Q = get_divergence(tutormodel, pupmodel,
+                                                      samples_P=tutsamples,
+                                                      samples_Q=pupsamples,
+                                                      nsteps=opts['nsteps'],
+                                                      beta=opts['sample_invtemp'],
+                                                      sample_var=opts['sample_variance'])
                    
+            KLD_tut_pup[d][k] = DKL_P_Q
+            KLD_pup_tut[d][k] = DKL_Q_P
+            JFD[d][k] = DKL_symm
+            logLscores[d][k] = [logP_P, logQ_P, log_Q_Q, logP_Q]
             
-            print('...... KLD_tut_pup: %.4f  , KLD_pup_tut: %.4f, JSD: %.4f'%(KLD_tut_pup[d,k],
-                                                                              KLD_pup_tut[d,k],
-                                                                              JFD[d,k]))
+            print('...... KLD_tut_pup: %.4f  , KLD_pup_tut: %.4f, JFD: %.4f, logQ_P: %.4f, logP_Q: %.4f'%(DKL_P_Q,
+                                                                              DKL_Q_P,
+                                                                              DKL_symm, logQ_P, logP_Q))
             
-    return KLD_tut_pup, KLD_pup_tut, JFD, model_entropies, total_duration
+            
+    return KLD_tut_pup, KLD_pup_tut, JFD, logLscores, model_entropies, total_duration
 
 
 
@@ -207,12 +241,11 @@ def compute_divergence_curve(opts):
 parser = argparse.ArgumentParser()
 parser.add_argument('--birdpath',type=str,required=True)
 parser.add_argument('--savepath', type=str, required=True)
-parser.add_argument('--divergence_from_samples', action='store_true',help='compute divergence from sampling from the model')
-parser.add_argument('--nsteps', type = int, default = 100)
-parser.add_argument('--nsamps', type = int, default = 10000)
-parser.add_argument('--sample_variance', typ=int, default=0)
+parser.add_argument('--divergence_from_samples', action='store_true', help='compute divergence from sampling from the model')
+parser.add_argument('--nsteps', type=int, default = 100, help='number of timesteps per sample sequence')
+parser.add_argument('--nsamps', type=int, default = 10000, help='number of sequences to sample')
+parser.add_argument('--sample_variance', type=int, default=0)
 parser.add_argument('--sample_invtemp', type=float, default=1.)
-parser.add_argument('--hidden_state_size', type = int, nargs = '+', default = [5, 10, 12, 15, 20, 25, 30, 40, 50, 60, 100])
 
 
 def main():
@@ -220,12 +253,21 @@ def main():
     args = parser.parse_args()
     args = vars(args)
     
-    KLD_tut_pup, KLD_pup_tut, JFD, model_entropies, total_duration = compute_divergence_curve(args)
+    os.makedirs(args['savepath'], exist_ok=True)
     
-    joblib.dump({'KLD_tut_pup':KLD_tut_pup, 'KLD_pup_tut':KLD_pup_tut,
-                'JFD':JFD, 'model_entropies': model_entropies, 'total_duration': total_duration},
+    # FIX 
+    args['tutor_hmm_model'] = None
+    
+    KLD_tut_pup, KLD_pup_tut, JFD, logLscores, model_entropies, total_duration = compute_divergence_curve(args)
+    
+    joblib.dump({'KLD_tut_pup':KLD_tut_pup,
+                 'KLD_pup_tut':KLD_pup_tut,
+                 'JFD':JFD,
+                 'logLscores': logLscores,
+                 'model_entropies': model_entropies,
+                 'total_duration': total_duration},
                 
-                args['savepath'] + 'KLD_JSD_divergences.pkl')
+                join(args['savepath'], 'KLD_JSD_divergences.pkl'))
 
     
     
