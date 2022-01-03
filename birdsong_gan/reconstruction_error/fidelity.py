@@ -448,7 +448,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--birdname', type=str, required=True)
 parser.add_argument('--modelpath',type=str, required=True)
 parser.add_argument('--datapath', type=str, required=True, help='path to training dataset')
-parser.add_argument('--netGfilepath', type=str, default='netG_epoch_35')
+parser.add_argument('--netGfilepath', type=str, default='netG_epoch_40_day_all.pth')
+parser.add_argument('--daily_gan', action='store_true', help='whether this a daily gan model')
 parser.add_argument('--savepath', type=str, default='fidelity_results')
 parser.add_argument('--nembed', type=int, default=3, help='embedding dimensions')
 parser.add_argument('--nsamples', type=int, default=1, help='number of fake sequences to generate')
@@ -482,7 +483,7 @@ def main():
     opts = vars(args)
     
     # which days were trained for this bird and model type
-    day_folders = sorted(glob(join(args.modelpath, 'day*')))
+    day_folders = sorted(glob(join(args.modelpath, 'day_*')))
     
     # make bird dataset
     dataset = bird_dataset_single_hdf(opts['datapath'], opts['birdname'])
@@ -499,7 +500,13 @@ def main():
     metrics_dict = dict(day_id=[], hmm_nstates=[], avg_precision=[], avg_recall=[], avg_authenticity=[], 
                        density=[], coverage=[])
     
+    netG = None
+    if not opts["daily_gan"]:
+        netGfilepath = join(args.modelpath, args.netGfilepath)
+        netG = load_netG(netGfilepath, model_opts['nz'], model_opts['ngf'], model_opts['nc'],
+                            args.cuda, resnet=True)
     
+        
     for day in day_folders:
         
         # find the day index from the name
@@ -520,9 +527,10 @@ def main():
         print('## finished training embedding ##')
        
         # find which netG to use
-        netGfilepath = join(day, args.netGfilepath) + '_day_' + str(dayidx) + '.pth'
-        netG = load_netG(netGfilepath, model_opts['nz'], model_opts['ngf'], model_opts['nc'],
-                        args.cuda, resnet=True)
+        if netG is None:
+            netGfilepath = join(day, args.netGfilepath) + '_day_' + str(dayidx) + '.pth'
+            netG = load_netG(netGfilepath, model_opts['nz'], model_opts['ngf'], model_opts['nc'],
+                            args.cuda, resnet=True)
         
         hmm_models = sorted(glob(join(day, 'hmm_*')))
         
