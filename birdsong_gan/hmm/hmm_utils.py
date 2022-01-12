@@ -1,7 +1,6 @@
 import sys
-import os
-sys.path.append(os.path.split(os.getcwd())[0])
-from hmmlearn.hmm import GaussianHMM, MultinomialHMM
+import os 
+from hmmlearn.hmm import GaussianHMM, GMMHMM
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -77,49 +76,6 @@ def tempered_sampling(model, beta=3., timesteps=64, sample_obs=True, start_state
 
 
 
-class Latent_loader(object):
-    def __init__(self, merged_list, external_file_path = [], train_val_split=0.8, val_test_split=0.5):
-        # split every element of merge_list into train, val and test
-        self.id_lists_per_day = []
-        for m in merged_list:
-            id_list_train, id_list_valtest = split_list(m, train_val_split)
-            id_list_val, id_list_test = split_list(id_list_valtest, val_test_split)
-            self.id_lists_per_day.append([id_list_train, id_list_val, id_list_test])
-        self.days = np.arange(len(merged_list))
-        self.external_file_path = external_file_path
-        
-    def __getitem__(self, index):
-        if self.external_file_path:
-            birdname = os.path.basename(index['filepath'])
-            f = h5py.File(os.path.join(self.external_file_path, birdname),'r')
-        else:
-            f = h5py.File(index['filepath'], 'r') 
-        z = np.array(f.get(index['within_file']))
-        f.close()
-        return z
-    
-    def get_whole_day_sequences(self, day):
-        id_list_train, id_list_val, id_list_test = self.id_lists_per_day[day]
-        Ztrain = [None for i in range(len(id_list_train))]
-        Zval = [None for i in range(len(id_list_val))]
-        Ztest = [None for i in range(len(id_list_test))]
-        for i in range(len(id_list_train)):
-            Ztrain[i] = self.__getitem__(id_list_train[i])
-        for i in range(len(id_list_test)):
-            Ztest[i] = self.__getitem__(id_list_test[i])
-        for i in range(len(id_list_val)):
-            Zval[i] = self.__getitem__(id_list_val[i])
-        return Ztrain, Ztest, Zval
-    
-    def get_N_random_training_samples(self, day, N=1):
-        id_list_train, _ = self.id_lists_per_day[day]
-        inds = np.random.choice(np.arange(len(id_list_train)), size=N, replace=False)
-        id_list_out = [id_list_train[i] for i in inds]
-        Zsample = [self.__getitem__(i) for i in id_list_out]
-        return Zsample
-
-    
-    
 class songbird_data_sample(object):
     def __init__(self, path2idlist, external_file_path):
         with open(path2idlist, 'rb') as f:
@@ -470,3 +426,17 @@ def load_netE(netE_file_path, nz = 16, ngf = 128, nc = 1, cuda = False, resnet =
     if cuda:
         netE = netE.cuda()
     return netE
+
+
+def generate_samples(netG, hmm, nsamples=1, invtemp=1., timesteps=[], cuda=True):
+    """Generate samples from trained netG and hmm"""
+    seqs = [tempered_sampling(hmm, invtemp, timesteps=timesteps[i], 
+                                sample_obs=True, start_state_max=True, 
+                                 sample_var = 0.)[0] for i in range(nsamples)]
+    # decode with netG
+    seqs_out = [None for _ in range(len(seqs))]
+    for i in range(len(seqs)):
+        seqs_out[i] = overlap_decode(seqs[i], netG,  noverlap = 0,
+                                          cuda = cuda, get_audio = False)[0]
+    
+    return seqs_out
