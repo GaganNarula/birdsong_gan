@@ -24,7 +24,7 @@ import gc
 opts_dict = {'input_path': EXT_PATH,
        'outf': SAVE_PATH, 'age_weights_path': '', 'netGpath':'', 'netEpath':'', 'netD1path':'','netD2path':'', 
         'netD3path': '','distance_fun': 'L1', 'subset_age_weights' : [0., 1.], 
-        'workers': 6, 'batchSize': 128, 
+        'workers': 8, 'batchSize': 128, 
         'imageH': 129, 'imageW': 16, 'noverlap':0, 'nz': 16,'nc': 1, 'ngf': 256, 'ndf': 128,'niter': 50,
        'lr': 1e-5, 'lambdaa': 150, 'zreg_weight': 1, 'schedule_lr':False, 'd_noise': 0.1,
        'beta1': 0.5, 'cuda': True, 'ngpu': 1, 'nreslayers': 3, 'z_reg':False, 'mds_loss':False,
@@ -57,7 +57,7 @@ parser.add_argument('--schedule_lr', action = 'store_true', help='change learnin
 parser.add_argument('--log_every', type=int, default=300, help='make images and print loss every X batches')
 parser.add_argument('--get_audio', action='store_true', help='write wav file from spectrogram')
 parser.add_argument('--do_pca', action = 'store_true', help='to learn a PCA model of spectrogram chunks')
-parser.add_argument('--npca_components', type = int, default = 256, help = 'how many PCA components ?')
+parser.add_argument('--npca_components', type = float, default = 0.98, help = 'how much variance explained (PCA components) ?')
 parser.add_argument('--cuda', action='store_true', help='use gpu')
 parser.add_argument('--netEpath',type = str, default = '')
 parser.add_argument('--netGpath',type = str, default = '')
@@ -132,7 +132,7 @@ cudnn.benchmark = True
 #cudnn.allow_tf32 = True
 
 
-if __name__ == '__main__':
+def main():
     args = parser.parse_args()
     
     # choose which network type to train
@@ -608,3 +608,6 @@ if __name__ == '__main__':
     joblib.dump( {'avg_recon': per_epoch_avg_loss_recon, 'std_recon': per_epoch_std_loss_recon, 
                                      'avg_gan': per_epoch_avg_loss_gan, 'std_gan': per_epoch_std_loss_gan}, losspath+'testloss.pkl')
         
+
+if __name__ == '__main__':
+    main()
