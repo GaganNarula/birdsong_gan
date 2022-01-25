@@ -369,7 +369,7 @@ def learn_single_hmm_gauss_with_initialization(data, lastmodel = None, lengths =
 
 
 def learn_single_hmm_gaussmix_with_initialization(data, lastmodel = None, lengths = [], K=10, covtype='spherical',
-                                                  nmix = nmix, transmat_prior=1, n_iter=1000, tol = 0.01,
+                                                  nmix = 10, transmat_prior=1, n_iter=1000, tol = 0.01,
                                                   fit_params = 'stmc', covars_prior = 1. ,init_params = 'kmeans'):
     """ Learn a single model on the set of sequences in data
         If lastmodel is provided, it is used to initialize the parameters of this model. 
@@ -379,6 +379,7 @@ def learn_single_hmm_gaussmix_with_initialization(data, lastmodel = None, length
             lastmodel : hmmlearn.hmm.GaussianHMM model. Learned from previous day.
             lengths : list, lengths of individual sequences in data
             K : int ,hidden state size
+            nmix: int, how many components in the gaussian mixture at each step
             covtype : str, {'spherical','diag','tied','full'} covariance matrix type
             transmat_prior : float, dirichlet concentration prior. Values > 1 lead to more uniform discrete probs
             n_iter : int, maximum number of EM iterations

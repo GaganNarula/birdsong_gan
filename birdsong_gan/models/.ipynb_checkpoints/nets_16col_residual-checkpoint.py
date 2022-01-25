@@ -15,6 +15,7 @@ def weights_init(m):
         m.weight.data.normal_(0.0, 0.02)
         m.bias.data.fill_(0)
     
+    
 class _netG(nn.Module):
     def __init__(self, nz, ngf, nc = 1, resks = 3):
         super(_netG, self).__init__()
@@ -265,27 +266,39 @@ class _netD(nn.Module):
     
     
 class InceptionNet(nn.Module):
-    def __init__(self, ndf, nc):
+    """A discriminator network from which fid_score can be computed
+        Inputs are assumed to be spectrogram chunks.
+    """
+    def __init__(self, ndf, nc, lr=1e-4, l2=1e-4, log_every=100):
         super(InceptionNet, self).__init__()
+        
         self.convs = nn.ModuleList([
             nn.Conv2d(nc, ndf, kernel_size=4, stride=(2,2), padding=(1,1), bias=False),
             # size H = (129 +2 -4)/2 + 1 = 64, W = (16 +2 -4)/2 + 1 = 8
+            
             nn.Conv2d(ndf, ndf * 2, kernel_size=(4, 3), stride=(2, 1), padding=(1, 0), bias=False),
             # size H = (64 +2 -4)/2 + 1 = 32, W = (8 -3) + 1 = 6
-            nn.Conv2d(ndf * 2, ndf * 4, kernel_size=(4,3), stride=(2,1), padding=(2,0), bias=False),
+            
+            nn.Conv2d(ndf * 2, ndf * 2, kernel_size=(4,3), stride=(2,1), padding=(2,0), bias=False),
             # size H = (32 +4 -4)/2 + 1 = 17, W = (6 -3) + 1 = 4
-            nn.Conv2d(ndf * 4, ndf * 8, kernel_size=(8,4), stride=(2,1), padding=1, bias=False),
+            
+            nn.Conv2d(ndf * 2, ndf, kernel_size=(8,4), stride=(2,1), padding=1, bias=False),
             # H = (17 +2 -8)/2 + 1 = 6, W = (4 +2 -4) + 1 = 3
-            nn.Conv2d(ndf * 8, 1, kernel_size=(6,3), stride=1, padding=0, bias=False),
-            # H = 6-6 + 1 =1, W = (4 - 3) +1 =  
+            
+            nn.Conv2d(ndf, 1, kernel_size=(6,3), stride=1, padding=0, bias=False),
+            # H = 6-6 + 1 =1, W = (4 - 3) +1 = 1
         ])
         self.lns = nn.ModuleList([nn.LayerNorm([ndf, 64, 8]),
                                   nn.LayerNorm([ndf * 2, 32, 6]),
-                                  nn.LayerNorm([ndf * 4, 17, 4]),
-                                  nn.LayerNorm([ndf * 8, 6, 3])])
+                                  nn.LayerNorm([ndf * 2, 17, 4]),
+                                  nn.LayerNorm([ndf, 6, 3])])
         self.activations = nn.ModuleList([nn.LeakyReLU(0.2),nn.LeakyReLU(0.2),
                                     nn.LeakyReLU(0.2),nn.LeakyReLU(0.2)])
-
+        self.out_act =nn.Sigmoid()
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=l2, betas = (0.5, 0.9))
+        self.costfunc = nn.BCELoss()
+        self.log_every = log_every
+        
     def get_middle_layer(self, x):
         for i in range(4):
             x = self.convs[i](x)
@@ -307,10 +320,26 @@ class InceptionNet(nn.Module):
     def forward(self, x):
         x = self.get_middle_layer(x)
         x = self.convs[-1](x)
-        x = nn.Sigmoid()(x)
-        output = x.view(-1,1)
-        return output
-    
+        x = self.out_act(x.view(-1,1))
+        return x
+        
+    def fit(self, traindataloader):
+        
+        N = len(traindataloader)
+        for i, batch in enumerate(traindataloader):
+            x, y = batch
+            
+            yhat = self.forward(x)
+            
+            loss = self.costfunc(yhat, y)
+            
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+            
+            if i % self.log_every == 0:
+                print('..... batch=%d/%d loss = %.3f .....'%(i,N,float(loss.detach())))
+                
     
     
 from scipy.linalg import sqrtm

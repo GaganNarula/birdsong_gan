@@ -697,7 +697,12 @@ def main():
         # train on all days from this bird
         traindataloader = model.make_single_dataloader()
         model.train_network(traindataloader)
-        
+        # get rid of rubbish
+        traindataloader = None
+        model.netD1 = None
+        model.netD2 = None
+        model.netD3 = None
+        gc.collect()
         
     for day in range(opts['start_from_day'], end_at):
         

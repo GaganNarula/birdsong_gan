@@ -56,6 +56,52 @@ def get_normalized_scores(model, seqs, normalize_by_length=True):
     return LogL / len(seqs)
 
 
+def get_pointwise_metrics(modelP, modelQ, samplesP, samplesQ):
+    """Computes sample-wise or 'pointwise' KL terms
+    """
+    n_p = len(samplesP)
+    n_q = len(samplesQ)
+    
+    PlogP = np.zeros(n_p)
+    PlogQ = np.zeros(n_p)
+    QlogP = np.zeros(n_q)
+    QlogQ = np.zeros(n_q)
+    
+    KL_P_Q = np.zeros(n_p)
+    KL_Q_P = np.zeros(n_q)
+    KL_P_M = np.zeros(n_p)
+    KL_Q_M = np.zeros(n_q)
+    
+    for n in range(n_p):
+
+        l = samplesP[n].shape[0]
+        PlogP[n] = modelP.score(samplesP[n]) / l
+        P_x_from_P = np.exp(PlogP[n])
+        
+        PlogQ[n] = modelQ.score(samplesP[n]) / l
+        Q_x_from_P = np.exp(PlogQ[n])
+        
+        KL_P_Q[n] = PlogP[n] - PlogQ[n]
+        
+        KL_P_M[n] = PlogP[n] - np.log(P_x_from_P + Q_x_from_P)
+    
+    for n in range(n_q):
+        
+        l = samplesQ[n].shape[0]
+        QlogP[n] = modelP.score(samplesQ[n]) / l
+        P_x_from_Q = np.exp(QlogP[n])
+        
+        QlogQ[n] = modelQ.score(samplesQ[n]) / l
+        Q_x_from_Q = np.exp(QlogQ[n])
+        
+        Q_x_P[n] = model.Q
+        KL_Q_P[n] = QlogQ[n] - QlogP[n]
+        KL_Q_M[n] = QlogQ[n] - np.log(P_x_from_Q + Q_x_from_Q)
+        
+    return KL_P_Q, KL_Q_P, KL_P_M, KL_Q_M, PlogP, QlogQ, PlogQ, QlogP
+
+
+
 def get_divergence(P, Q, samples_P=None, samples_Q=None, nsteps=100,
                   beta=1., sample_var=None):
     """Compute the Montecarlo estimate of KL divergence between two
@@ -87,11 +133,13 @@ def get_divergence(P, Q, samples_P=None, samples_Q=None, nsteps=100,
         
         DKL_Q_P : float, D_KL(Q|P) = <logQ - logP>_Qsamples. (average over samples from Q)
         
-        DKL_symm: float, Symmetric Jeffrey's divergence: 0.5*(DKL(P|Q) + DKL(Q|P))     
+        Jeffreys: float, Symmetric Jeffrey's divergence: 0.5*(DKL(P|Q) + DKL(Q|P))     
         
         logP_P : float, neg entropy of model P
         logQ_P : float, cross entropy with samples from model P
-        logP_
+        logP_Q : float, cross entropy with samples from model Q
+        logQ_Q : float, neg entropy of model Q
+        
     """
     if samples_P is None:
         samples_P = get_samples(P, nsteps, nsamps,
@@ -103,16 +151,14 @@ def get_divergence(P, Q, samples_P=None, samples_Q=None, nsteps=100,
                                 random_state, sample_var,
                                 beta)
         
-    logP_P = get_normalized_scores(P, samples_P)
-    logQ_P = get_normalized_scores(Q, samples_P)
-    logQ_Q = get_normalized_scores(Q, samples_Q)
-    logP_Q = get_normalized_scores(P, samples_Q)
+    KL_P_Q, KL_Q_P, KL_P_M, KL_Q_M, PlogP, QlogQ, PlogQ, QlogP = get_pointwise_metrics(P, Q, samplesP, samplesQ)
     
-    DKL_P_Q = logP_P - logQ_P
-    DKL_Q_P = logQ_Q - logP_Q
-    DKL_symm = 0.5*(DKL_P_Q + DKL_Q_P)
+    KL_P_Q = KL_P_Q.mean()
+    KL_Q_P = KL_Q_P.mean()
+    Jeffreys = 0.5*(KL_P_Q + KL_Q_P)
+    JensonShannon = (KL_P_M.mean() + KL_Q_M.mean())
     
-    return DKL_P_Q, DKL_Q_P, DKL_symm, logP_P, logQ_P, logQ_Q, logP_Q
+    return KL_P_Q, KL_Q_P, Jeffreys, JensonShannon, PlogP.mean(), PlogQ.mean(), QlogQ.mean(), QlogP.mean()
 
     
     
@@ -128,8 +174,7 @@ def load_sequence_data(data_path: str):
     data = joblib.load(data_pkl_path)
     ztrain = data['ztrain']
     ztest = data['ztest']
-    entropies = data['Entropies']
-    return ztrain + ztest, entropies
+    return ztrain + ztest
 
 
 
@@ -158,6 +203,7 @@ def compute_divergence_curve(opts):
     KLD_pup_tut = [None for _ in range(ndays)]
     logLscores = [None for _ in range(ndays)]
     JFD = [None for _ in range(ndays)]
+    JSD = [None for _ in range(ndays)]
     
     # extra, for analysis
     total_duration = np.zeros(ndays)
@@ -175,6 +221,7 @@ def compute_divergence_curve(opts):
         KLD_tut_pup[d] = {}
         KLD_pup_tut[d] = {}
         JFD[d] = {}
+        JSD[d] = {}
         model_entropies[d] = {}
         logLscores[d] = {}
         
@@ -191,9 +238,9 @@ def compute_divergence_curve(opts):
             
             
             if not opts['divergence_from_samples']:
-                pupsamples, entropies = load_sequence_data(join(days[d], 'hmm_hiddensize_' + k))
+                pupsamples = load_sequence_data(join(days[d], 'hmm_hiddensize_' + k))
                 
-                tutsamples, _ = load_sequence_data(join(tutorday,  'hmm_hiddensize_' + k))
+                tutsamples = load_sequence_data(join(tutorday,  'hmm_hiddensize_' + k))
                                                            
             else:
                 # sample pupil and tutor models
@@ -216,7 +263,7 @@ def compute_divergence_curve(opts):
             # record singing duration (in counts of frames)
             total_duration[d] = np.sum([x.shape[0] for x in pupsamples])
             
-            DKL_P_Q, DKL_Q_P, DKL_symm, logP_P, logQ_P, log_Q_Q, logP_Q = get_divergence(tutormodel, pupmodel,
+            KL_P_Q, KL_Q_P, Jeffreys, jenson, PlogP, PlogQ, QlogQ, QlogP = get_divergence(tutormodel, pupmodel,
                                                       samples_P=tutsamples,
                                                       samples_Q=pupsamples,
                                                       nsteps=opts['nsteps'],
@@ -225,7 +272,9 @@ def compute_divergence_curve(opts):
                    
             KLD_tut_pup[d][k] = DKL_P_Q
             KLD_pup_tut[d][k] = DKL_Q_P
-            JFD[d][k] = DKL_symm
+            JFD[d][k] = Jeffreys
+            JSD[d][k] = jenson
+            
             logLscores[d][k] = [logP_P, logQ_P, log_Q_Q, logP_Q]
             
             print('...... KLD_tut_pup: %.4f  , KLD_pup_tut: %.4f, JFD: %.4f, logQ_P: %.4f, logP_Q: %.4f'%(DKL_P_Q,

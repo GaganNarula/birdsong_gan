@@ -9,6 +9,9 @@ import sys
 import os
 sys.path.append(os.pardir)
 
+import warnings
+warnings.filterwarnings("ignore")
+
 from os.path import join
 import joblib
 from glob import glob
@@ -65,6 +68,77 @@ class EmbeddingNet(nn.Module):
         return self.mlp(x)
     
     
+class AutoencoderNet(nn.Module):
+    """Embed real data and generated data into a lower dimensional embedding space.
+        Use autoencoding loss for embedding
+    """
+    def __init__(self, indims=129, nembed=3, nlin=50, leak=0.1,
+                 nrnn=50, nrnnlayers=3, bidirectional=True, dropout=0.0):
+        
+        super(AutoencoderNet, self).__init__()
+        
+        self.encoder_rnn = nn.GRU(indims, nrnn, nrnnlayers, bidirectional=bidirectional,
+                          dropout=dropout, batch_first=True)
+        self.decoder_rnn = nn.GRU(nembed, nrnn, nrnnlayers, bidirectional=False,
+                          dropout=dropout, batch_first=True)
+        
+        bid = 2 if bidirectional else 1
+        
+        self.mlp_in = nn.Sequential(
+            nn.Linear(nrnn*bid, nlin),
+            nn.LayerNorm(nlin),
+            nn.LeakyReLU(leak),
+            
+            nn.Linear(nlin, nlin),
+            nn.LayerNorm(nlin),
+            nn.LeakyReLU(leak),
+            
+            nn.Linear(nlin, nembed)
+        )
+        
+        self.mlp_out = nn.Sequential(
+            nn.Linear(nrnn, nlin),
+            nn.LayerNorm(nlin),
+            nn.LeakyReLU(leak),
+            
+            nn.Linear(nlin, nlin),
+            nn.LayerNorm(nlin),
+            nn.LeakyReLU(leak),
+            
+            nn.Linear(nlin, indims)
+        )
+        
+        self.len_in = None
+        
+    def encode(self, x):
+        # x is a spectrogram of shape (N,H,L)
+        # H = feature dims
+        # L = length
+        x = x.permute(0,2,1)
+        
+        self.len_in = x.shape[1]
+        
+        x,_ = self.encoder_rnn(x)
+        # take last time step value
+        x = x[:,-1,:]
+        return self.mlp_in(x) # z
+    
+    def decode(self, z):
+        # tile z 
+        z = z.view(-1,1,z.shape[-1])
+        z = torch.tile(z, (1, self.len_in, 1))
+        
+        xhat, _ = self.decoder_rnn(z)
+        xhat = self.mlp_out(xhat).permute(0,2,1)
+        return xhat
+
+    def forward(self, x):
+        z = self.encode(x)
+        return self.decode(z), z
+    
+    
+    
+    
 def make_numpy(x):
     if isinstance(x, torch.Tensor):
         return x.detach().cpu().numpy()
@@ -109,7 +183,7 @@ def precision_classifier(fake_x, center, r_alpha):
 
 
 
-def alpha_precision_curve(fake_pts, real_pts, alphas=np.linspace(0.1, 1.,50),opts):
+def alpha_precision_curve(fake_pts, real_pts, opts, alphas=np.linspace(0.1, 1.,50)):
     """Summary Precision values for a range of alphas
     """
     N = len(real_pts) # num points
@@ -129,7 +203,7 @@ def alpha_precision_curve(fake_pts, real_pts, alphas=np.linspace(0.1, 1.,50),opt
     
     
 
-def beta_recall_curve(fake_pts, real_pts, nearest_neighbors, betas=np.linspace(0.1, 1.,50), opts):
+def beta_recall_curve(fake_pts, real_pts, nearest_neighbors, opts, betas=np.linspace(0.1, 1.,50)):
     """Summary Recall values for a range of beta values
     """
     N = len(real_pts) # num points
@@ -246,6 +320,7 @@ def density_and_coverage(fake_x, real_x_pts, K=10):
             
     
 def learn_embedding(data, opts):
+    
     print('..... making tensor dataset and dataloader .....')
     traindataset = make_dataset(data, opts['max_length'])
     traindataloader = DataLoader(traindataset, batch_size=opts['batch_size'], shuffle=True, drop_last=True)
@@ -256,17 +331,44 @@ def learn_embedding(data, opts):
     if opts['cuda']:
         embedder = embedder.cuda()
 
-    return train(embedder, traindataloader, opts)
+    return train_embedding(embedder, traindataloader, opts)
+
+
+
+def learn_autoencoding(data, opts):
+    
+    print('..... making tensor dataset and dataloader .....')
+    traindataset = make_dataset(data, opts['max_length'])
+    traindataloader = DataLoader(traindataset, batch_size=opts['batch_size'], shuffle=True, drop_last=True)
+    
+    print('..... training embedding .....')
+    embedder = AutoencoderNet(data[0].shape[0], opts['nembed'], nrnn=opts['nrnn'], nrnnlayers=opts['nrnnlayers'],
+                       dropout=opts['dropout'], nlin=opts['nlin'])
+    if opts['cuda']:
+        embedder = embedder.cuda()
+
+    return train_autoencoder(embedder, traindataloader, opts)
 
 
 
 def embed_list_of_sequences(embedder, seqs, cuda=True):
+    
     Xtilde = []
     for x in seqs:
+        
         x = torch.from_numpy(x).to(torch.float32)
+        
         if cuda:
             x = x.cuda()
-        Xtilde.append(embedder(x.view(1, x.shape[0], x.shape[1])))
+            
+        z = embedder(x.view(1, x.shape[0], x.shape[1]))
+        
+        if isinstance(z, torch.Tensor):  
+            Xtilde.append(z)
+        else:
+            # tuple output from autoencoder
+            Xtilde.append(z[1])
+            
     return torch.cat(Xtilde, dim=0)
     
     
@@ -337,8 +439,67 @@ def evaluate_generative_model(netG, hmm, data, opts, embedder = None):
 
 
 
+def train_autoencoder(model, traindataloader, opts):
+    """Traning function for autencoding encoder-decoder network
+        Params
+        ------
+            model : 
+            dataloader : torch.utils.data.Dataloader map style
+            opts : options dict
+    """
     
-def train(model, traindataloader, opts):
+    if opts['cuda']:
+        dev = torch.device('cuda:0')
+    else:
+        dev = torch.device('cpu')
+        
+    optimizer = torch.optim.Adam(model.parameters(), lr = opts['lr'], weight_decay = opts['l2'], 
+                                 betas=(opts['beta1'], 0.999))
+    N = len(traindataloader)
+    
+    costfunc = nn.MSELoss()
+    
+    for n in range(opts['nepochs']):
+
+        for i, x in enumerate(traindataloader):
+            x = x[0]
+            
+            optimizer.zero_grad()
+            model.zero_grad()
+            
+            # make sure the shape is (N,L,H)
+            x = x.to(dev)
+             
+            # encode and decode
+            xhat, z = model(x)
+            
+            # reduce MSE and L2 norm of z
+            loss1 = costfunc(xhat, x)
+            loss2 = torch.norm(z, p = 2)
+            loss = loss1 + loss2
+            loss.backward()
+            
+            optimizer.step()
+            
+            #train_loss.append()
+            recon_loss = float(loss1.detach())
+            norm_loss = float(loss2.detach())
+            
+            if i%opts['log_every'] == 0:
+                print("..... epoch %d, minibatch [%d/%d], recon_loss = %.3f, norm_loss = %.3f ....."%(n,i, N,
+                                                                                                      recon_loss,
+                                                                                                      norm_loss))
+            
+    # model checkpoint
+    if opts['checkpoint_models']:
+        torch.save(model.state_dict(), '%s/autoencoder_day_%d.pth' % (opts['savepath'], opts['dayidx']))
+        
+    return model
+
+
+
+    
+def train_embedding(model, traindataloader, opts):
     """Traning function for embedding network
         Params
         ------
@@ -423,6 +584,7 @@ def generate_samples(netG, hmm, nsamples=1, invtemp=1., timesteps=[], cuda=True)
     return seqs_out
 
 
+
 def pad_to_maxlength(x, max_length=100):
     """Pad a sequence to maximum length"""
     if x.shape[1] >= max_length:
@@ -431,6 +593,7 @@ def pad_to_maxlength(x, max_length=100):
     # else pad right
     x = np.concatenate([x, np.zeros((x.shape[0], max_length-x.shape[1]))],axis=1)
     return x
+
 
 
 def make_dataset(sequences, max_length=100):
@@ -450,6 +613,7 @@ parser.add_argument('--modelpath',type=str, required=True)
 parser.add_argument('--datapath', type=str, required=True, help='path to training dataset')
 parser.add_argument('--netGfilepath', type=str, default='netG_epoch_40_day_all.pth')
 parser.add_argument('--daily_gan', action='store_true', help='whether this a daily gan model')
+parser.add_argument('--learn_embedding', action='store_true', help='learns one class SVM type embedder')
 parser.add_argument('--savepath', type=str, default='fidelity_results')
 parser.add_argument('--nembed', type=int, default=3, help='embedding dimensions')
 parser.add_argument('--nsamples', type=int, default=1, help='number of fake sequences to generate')
@@ -521,11 +685,17 @@ def main():
         print('..... total %d sequences on this day .....'%(len(X)))
         
         # first train embedding on real data
-        print('## training embedding ##')
-        embedder = learn_embedding(X, opts)
-        embedder.eval()
-        print('## finished training embedding ##')
-       
+        if opts['learn_embedding']:
+            print('## training embedding ##')
+            embedder = learn_embedding(X, opts)
+            embedder.eval()
+            print('## finished training embedding ##')
+        else:
+            print('## training autoencoder ##')
+            embedder = learn_autoencoding(X, opts)
+            embedder.eval()
+            print('## finished training autoencoder ##')
+            
         # find which netG to use
         if netG is None:
             netGfilepath = join(day, args.netGfilepath) + '_day_' + str(dayidx) + '.pth'
@@ -550,13 +720,13 @@ def main():
             print(f"..... day {dayname}, density {metrics[3]} .....")
             print(f"..... day {dayname}, coverage {metrics[4]} .....")
             
-            metrics_dict['day_id'] = dayidx
-            metrics_dict['hmm_nstates'] = nstates
-            metrics_dict['avg_precision'] = metrics[0]
-            metrics_dict['avg_recall'] = metrics[1]
-            metrics_dict['avg_authenticity'] = metrics[2]
-            metrics_dict['density'] = metrics[3]
-            metrics_dict['coverage'] = metrics[4]
+            metrics_dict['day_id'].append(dayidx)
+            metrics_dict['hmm_nstates'].append(nstates)
+            metrics_dict['avg_precision'].append(metrics[0])
+            metrics_dict['avg_recall'].append(metrics[1])
+            metrics_dict['avg_authenticity'].append(metrics[2])
+            metrics_dict['density'].append(metrics[3])
+            metrics_dict['coverage'].append(metrics[4])
             
             
     # save metrics as csv file

@@ -1,4 +1,16 @@
-from .hmm_utils import *
+import sys
+import os
+from hmmlearn.hmm import GaussianHMM, GMMHMM
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+from utils.utils import transform, inverse_transform, save_audio_sample, rescale_spectrogram, overlap_encode, overlap_decode
+import argparse
+import joblib
+from joblib import Parallel, delayed
+from time import time
+from scipy.stats import entropy, multivariate_normal
+import h5py
 import pdb
 import gc
 import warnings
@@ -284,12 +296,14 @@ def initKmeans_means_and_covs(x, K):
     return means, covs
 
 
+
 def init_gmm_means_and_covs(x, K, covtype = 'diag'):
     from sklearn.mixture import GaussianMixture
     gmm = GaussianMixture(n_components = K, covariance_type = covtype, 
                          random_state = RNG, reg_covar = 1e-4)
     gmm.fit(x)
     return gmm.means_, gmm.covariances_
+
 
 
 def learn_single_hmm_gauss_with_initialization(data, lastmodel = None, lengths = [], K=10, covtype='spherical',
@@ -354,7 +368,66 @@ def learn_single_hmm_gauss_with_initialization(data, lastmodel = None, lengths =
     
 
 
-
+def learn_single_hmm_gaussmix_with_initialization(data, lastmodel = None, lengths = [], K=10, covtype='spherical',
+                                                  nmix = 10, transmat_prior=1, n_iter=1000, tol = 0.01,
+                                                  fit_params = 'stmc', covars_prior = 1. ,init_params = 'kmeans'):
+    """ Learn a single model on the set of sequences in data
+        If lastmodel is provided, it is used to initialize the parameters of this model. 
+        Params
+        ------
+            data : list of numpy.ndarrays. Each array has shape (timesteps , dimensions)
+            lastmodel : hmmlearn.hmm.GaussianHMM model. Learned from previous day.
+            lengths : list, lengths of individual sequences in data
+            K : int ,hidden state size
+            nmix: int, how many components in the gaussian mixture at each step
+            covtype : str, {'spherical','diag','tied','full'} covariance matrix type
+            transmat_prior : float, dirichlet concentration prior. Values > 1 lead to more uniform discrete probs
+            n_iter : int, maximum number of EM iterations
+            tol : float, tolerance for log-likelihood changes. If log-likelihood change < tol, learning is finished.
+            fit_params : str, Any combination of 's' (start_prob), 't' (transition matrix), 'm': mean and 
+                                'c' : covariance. The specified parameters will be estimated, others remain fixed.
+            init_cov : float, initial covariance along diagonal
+            covars_prior : float, covariance matrix prior. Same prior over all dimensions. The actual prior is a 
+                            diagonal.
+            init_params : str, 'stmc'
+    """
+    data = np.concatenate(data,axis=0)
+    if lastmodel is None:
+        if init_params == 'kmeans':
+            model = GMMHMM(n_components=K, nmix=nmix, covariance_type=covtype, transmat_prior=transmat_prior, \
+                       random_state=RNG, n_iter = n_iter, covars_prior=covars_prior,params=fit_params, 
+                        init_params = '', verbose=False, tol=tol, min_covar = 1e-2)
+            #intialize randomly
+            model.transmat_ = np.random.dirichlet(transmat_prior * np.ones(K), size = K)
+            model.startprob_ = np.random.dirichlet(transmat_prior * np.ones(K))
+            means_, covs_ = init_gmm_means_and_covs(data, K, covtype)
+            fake_init_data = np.random.multivariate_normal(mean=np.zeros(data.shape[1]),
+                                                           cov=np.eye(data.shape[1]), 
+                                                           size = data.shape[0])
+            model._init(fake_init_data)
+            model.means_ = means_
+            model.covars_ = covs_
+        else:
+            model = GaussianHMM(n_components=K, covariance_type=covtype, transmat_prior=transmat_prior, \
+                       random_state=RNG, n_iter = n_iter, covars_prior=covars_prior,params=fit_params, 
+                        init_params = init_params, verbose=False, tol=tol)
+        # for hmmlearn vesion 0.2.3
+        #fake_init_data = np.random.multivariate_normal(mean=np.zeros(data.shape[1]),
+        #                                               cov=covars_prior*np.eye(data.shape[1]), 
+        #                                               size = data.shape[0])
+        #model._init(fake_init_data)
+        model.fit(data, lengths)
+        return model
+    
+    model = GaussianHMM(n_components=K, covariance_type=covtype, transmat_prior=transmat_prior, \
+                       random_state=RNG, n_iter = n_iter,  covars_prior=covars_prior*np.ones(K), params=fit_params, 
+                        init_params = 'c', verbose=False, tol=tol)
+    # initiliaze parameters to last model
+    model.transmat_ = lastmodel.transmat_
+    model.startprob_ = lastmodel.startprob_
+    model.means_ = lastmodel.means_
+    model.fit(data, lengths)
+    return model
 
 
 
