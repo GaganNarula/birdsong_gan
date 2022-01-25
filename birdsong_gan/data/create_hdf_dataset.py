@@ -11,7 +11,8 @@ import pdb
 from scipy.signal import resample, iirfilter, sosfiltfilt
 import librosa as lc
 from librosa.util import fix_length
-from dataset import segment_spectrogram, transform
+from utils.utils import transform
+from data.dataset import segment_spectrogram
 
 
 
