@@ -11,7 +11,8 @@ import pdb
 from scipy.signal import resample, iirfilter, sosfiltfilt
 import librosa as lc
 from librosa.util import fix_length
-from dataset import segment_spectrogram, transform
+from utils.utils import transform
+from data.dataset import segment_spectrogram
 
 
 
@@ -212,7 +213,7 @@ def create_bird_spectrogram_hdf_external(birdname, birddatapath, outpath, target
                                         min_syll_dur_frames=20, energy_thresh_percent=0.1, compress_type='gzip', compression_idx=9) -> None:
     
     '''Creates HDF file for this bird. External data may be structured in different ways,
-        so this function simply finds all available .wav files and then creteas an hdf using
+        so this function simply finds all available .wav files and then creates an hdf using
         those.
         
     Params
