@@ -233,7 +233,7 @@ class songbird_random_sample(object):
     def __init__(self, path2idlist, external_file_path=[]):
         with open(path2idlist, 'rb') as f:
             self.id_list = pickle.load(f)
-            self.external_file_path = external_file_path
+        self.external_file_path = external_file_path
             
     def __len__(self):
         # total number of samples
@@ -324,7 +324,7 @@ class songbird_full_spectrogram(data.Dataset):
 
     
 class songbird_full_spectrogram_single_file(data.Dataset):
-    """This dataset retreives full spectrograms
+    """This dataset retreives full spectrograms, pads to max_length.
         Useful for recurrent network training.
         
         __getitem__() method is used by pytorch to
@@ -344,7 +344,7 @@ class songbird_full_spectrogram_single_file(data.Dataset):
     
     def get_random_item(self):
         idx = np.random.choice(len(self.id_list),size=1)
-        return self.__getitem__(idx)
+        return self.__getitem__(idx[0])
         
     def __getitem__(self, index):
         # load one wav file and get a sample chunk from it
@@ -381,7 +381,7 @@ class songbird_spectrogram_chunks_single_file(data.Dataset):
         with open(path2idlist, 'rb') as f:
             self.id_list = pickle.load(f)
             
-        self.birdfile = path2hdf
+        self.birdfile = h5py.File(path2hdf, 'r')
         self.imageW = imageW
         
     def __len__(self):
@@ -389,12 +389,13 @@ class songbird_spectrogram_chunks_single_file(data.Dataset):
         return len(self.id_list)
     
     def __getitem__(self, index):
-        with h5py.File(self.birdfile, 'r') as file:
-            # load one wav file and get a sample chunk from it
-            ID = self.id_list[index]
-            # this 'ID' is a dictionary containing several fields,
-            # use field 'within_file' to get data
-            x = np.array(file.get(ID['within_file']))
+        
+        # load one wav file and get a sample chunk from it
+        ID = self.id_list[index]
+        
+        # this 'ID' is a dictionary containing several fields,
+        # use field 'within_file' to get data
+        x = np.array(self.birdfile.get(ID['within_file']))
         
         x = self.crop_and_transform(x)
         age = torch.zeros(1) 
@@ -405,6 +406,8 @@ class songbird_spectrogram_chunks_single_file(data.Dataset):
         X = transform(X)
         return X
     
+    def close(self):
+        self.birdfile.close()
     
     
 
