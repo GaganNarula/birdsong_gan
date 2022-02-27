@@ -83,7 +83,7 @@ def get_pointwise_metrics(modelP, modelQ, samplesP, samplesQ):
         
         KL_P_Q[n] = PlogP[n] - PlogQ[n]
         
-        KL_P_M[n] = PlogP[n] - np.log(P_x_from_P + Q_x_from_P)
+        KL_P_M[n] = PlogP[n] - np.log((P_x_from_P + Q_x_from_P)/2)
     
     for n in range(n_q):
         
@@ -94,9 +94,8 @@ def get_pointwise_metrics(modelP, modelQ, samplesP, samplesQ):
         QlogQ[n] = modelQ.score(samplesQ[n]) / l
         Q_x_from_Q = np.exp(QlogQ[n])
         
-        Q_x_P[n] = model.Q
         KL_Q_P[n] = QlogQ[n] - QlogP[n]
-        KL_Q_M[n] = QlogQ[n] - np.log(P_x_from_Q + Q_x_from_Q)
+        KL_Q_M[n] = QlogQ[n] - np.log((P_x_from_Q + Q_x_from_Q)/2)
         
     return KL_P_Q, KL_Q_P, KL_P_M, KL_Q_M, PlogP, QlogQ, PlogQ, QlogP
 
@@ -151,12 +150,12 @@ def get_divergence(P, Q, samples_P=None, samples_Q=None, nsteps=100,
                                 random_state, sample_var,
                                 beta)
         
-    KL_P_Q, KL_Q_P, KL_P_M, KL_Q_M, PlogP, QlogQ, PlogQ, QlogP = get_pointwise_metrics(P, Q, samplesP, samplesQ)
+    KL_P_Q, KL_Q_P, KL_P_M, KL_Q_M, PlogP, QlogQ, PlogQ, QlogP = get_pointwise_metrics(P, Q, samples_P, samples_Q)
     
     KL_P_Q = KL_P_Q.mean()
     KL_Q_P = KL_Q_P.mean()
     Jeffreys = 0.5*(KL_P_Q + KL_Q_P)
-    JensonShannon = (KL_P_M.mean() + KL_Q_M.mean())
+    JensonShannon = 0.5*(KL_P_M.mean() + KL_Q_M.mean())
     
     return KL_P_Q, KL_Q_P, Jeffreys, JensonShannon, PlogP.mean(), PlogQ.mean(), QlogQ.mean(), QlogP.mean()
 
@@ -263,26 +262,26 @@ def compute_divergence_curve(opts):
             # record singing duration (in counts of frames)
             total_duration[d] = np.sum([x.shape[0] for x in pupsamples])
             
-            KL_P_Q, KL_Q_P, Jeffreys, jenson, PlogP, PlogQ, QlogQ, QlogP = get_divergence(tutormodel, pupmodel,
+            KL_P_Q, KL_Q_P, jeffreys, jenson, PlogP, PlogQ, QlogQ, QlogP = get_divergence(tutormodel, pupmodel,
                                                       samples_P=tutsamples,
                                                       samples_Q=pupsamples,
                                                       nsteps=opts['nsteps'],
                                                       beta=opts['sample_invtemp'],
                                                       sample_var=opts['sample_variance'])
                    
-            KLD_tut_pup[d][k] = DKL_P_Q
-            KLD_pup_tut[d][k] = DKL_Q_P
-            JFD[d][k] = Jeffreys
+            KLD_tut_pup[d][k] = KL_Q_P
+            KLD_pup_tut[d][k] = KL_P_Q
+            JFD[d][k] = jeffreys
             JSD[d][k] = jenson
             
-            logLscores[d][k] = [logP_P, logQ_P, log_Q_Q, logP_Q]
+            logLscores[d][k] = [PlogP, PlogQ, QlogQ, QlogP]
             
-            print('...... KLD_tut_pup: %.4f  , KLD_pup_tut: %.4f, JFD: %.4f, logQ_P: %.4f, logP_Q: %.4f'%(DKL_P_Q,
-                                                                              DKL_Q_P,
-                                                                              DKL_symm, logQ_P, logP_Q))
+            print('..... KLD_tut_pup: %.4f  , KLD_pup_tut: %.4f, JFD: %.4f, JSD: %.4f, PlogQ: %.4f, QlogP: %.4f .....'%(KL_P_Q,
+                                                                              KL_Q_P, jeffreys,
+                                                                              jenson, PlogQ, QlogP))
             
             
-    return KLD_tut_pup, KLD_pup_tut, JFD, logLscores, model_entropies, total_duration
+    return KLD_tut_pup, KLD_pup_tut, JFD, JSD, logLscores, model_entropies, total_duration
 
 
 
@@ -307,11 +306,12 @@ def main():
     # FIX 
     args['tutor_hmm_model'] = None
     
-    KLD_tut_pup, KLD_pup_tut, JFD, logLscores, model_entropies, total_duration = compute_divergence_curve(args)
+    KLD_tut_pup, KLD_pup_tut, JFD, JSD, logLscores, model_entropies, total_duration = compute_divergence_curve(args)
     
     joblib.dump({'KLD_tut_pup':KLD_tut_pup,
                  'KLD_pup_tut':KLD_pup_tut,
                  'JFD':JFD,
+                 'JSD': JSD,
                  'logLscores': logLscores,
                  'model_entropies': model_entropies,
                  'total_duration': total_duration},
