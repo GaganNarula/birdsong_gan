@@ -17,7 +17,7 @@ from reconstruction_error.pca import learn_pca_model
 import pdb
 import joblib
 import gc
-
+import json
 
 
 
@@ -38,7 +38,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--training_path', required=True, help='path to training dataset')
 parser.add_argument('--test_path', required=True, help='path to test dataset')
 parser.add_argument('--outf', required=True, help='folder to output images and model checkpoints')
-parser.add_argument('--external_file_path', default=EXT_PATH, help='path to folder containing bird hdf files')
+parser.add_argument('--path2hdf', default=EXT_PATH, help='path to folder containing bird hdf files')
 parser.add_argument('--batchSize', type=int, default=128, help='input batch size')
 parser.add_argument('--nz', type=int, default=32, help='size of the latent z vector')
 parser.add_argument('--train_residual', action = 'store_true')
@@ -133,7 +133,10 @@ cudnn.benchmark = True
 
 
 def main():
+    
     args = parser.parse_args()
+    
+    opts_dict.update(vars(args))
     
     # choose which network type to train
     if args.train_residual:
@@ -142,20 +145,18 @@ def main():
         from models.nets_16col_layernorm import _netG, _netE, _netD, InceptionNet, weights_init 
         
     outf = make_output_folder(args.outf)
+    opts_dict['outf'] = outf
     
     if args.manualSeed==-1:
         opts_dict['manualSeed'] = random.randint(1, 10000) # fix seed
     else:
         opts_dict['manualSeed'] = args.manualSeed
-        
-    V = vars(args)
-    for k,v in V.items():
-        if k in opts_dict:
-            opts_dict[k] = v
             
-    opts_dict['outf'] = outf
+    
     # save opts
-    joblib.dump(opts_dict,os.path.join(opts_dict['outf'],'opts_dict.pkl'))
+    with open(os.path.join(opts_dict['outf'],'opts_dict.json'), 'w') as file:
+        json.dump(opts_dict, file)
+    
     
     # fix seed
     print("Random Seed: ", opts_dict['manualSeed'])
@@ -174,21 +175,21 @@ def main():
     #### setup datasets and dataloaders ####
     
     # initialize the dataset and dataloader objects
-    train_dataset = songbird_spectrogram_chunks_single_file(args.training_path, args.external_file_path,
+    train_dataset = songbird_spectrogram_chunks_single_file(args.training_path, args.path2hdf,
                                                             opts_dict['imageW'])
     
     train_dataloader = DataLoader(train_dataset, batch_size=opts_dict['batchSize'], sampler = None,
                                              shuffle=True, num_workers=int(opts_dict['workers']),
                                         drop_last = True)
     
-    test_dataset = songbird_spectrogram_chunks_single_file(args.test_path, args.external_file_path,
+    test_dataset = songbird_spectrogram_chunks_single_file(args.test_path, args.path2hdf,
                                     opts_dict['imageW'])
     
     test_dataloader = DataLoader(test_dataset, batch_size= opts_dict['batchSize'],
                                 shuffle=False, num_workers=int(opts_dict['workers']),
                                 drop_last = True)
     # for example outputs
-    sample_dataset = songbird_full_spectrogram_single_file(args.training_path, args.external_file_path)
+    sample_dataset = songbird_full_spectrogram_single_file(args.training_path, args.path2hdf)
     
     
     ### make models ###
@@ -496,7 +497,7 @@ def main():
                     # save original spectrogram
                     gagan_save_spect('%s/input_spect_epoch_%03d_batchnumb_%d.eps'
                                          % (opts_dict['outf'], epoch, i), 
-                                         rescale_spectrogram(transform(sample)))
+                                         rescale_spectrogram(sample))
                     # save reconstruction
                     zvec = overlap_encode(sample, netE, transform_sample = False, imageW = opts_dict['imageW'],
                                            noverlap = opts_dict['noverlap'], cuda = opts_dict['cuda'])
@@ -603,6 +604,9 @@ def main():
         netG.train()
         netE.train()
         netD2.train()
+    
+    train_dataset.close()
+    test_dataset.close()
     
     # end of training
     joblib.dump( {'avg_recon': per_epoch_avg_loss_recon, 'std_recon': per_epoch_std_loss_recon, 

@@ -289,13 +289,13 @@ class bird_dataset(object):
         self.file.close()
         
 
-def hmm_num_params(nstates, ndim, covariance_type='diag'):
+def hmm_num_free_params(nstates, ndim, covariance_type='diag'):
     """How many learnable parameters are there in this hmm?"""
     p = 0 # num parameters
     # sum over n-1 startprobs
     p = nstates - 1
     # sum over n**2 transition probs
-    p += nstates**2
+    p += nstates**2 - nstates
     # sum up mean
     p += nstates*ndim
     # now covariance

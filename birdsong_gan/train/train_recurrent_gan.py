@@ -230,7 +230,6 @@ def train(model, traindataloader, testdataloader, opts):
             if opts['cuda']:
                 x = x.cuda()
             
-                
             ###### TRAIN DISCRIMINATOR 1 Fake vs Real ######
             # sample some fake trajectories
             z = model.prior_sample(opts['batch_size'], opts['max_length']//opts['imageW'],

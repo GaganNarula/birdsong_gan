@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 import numpy as np
-
+import pdb
 
 
 def weights_init(m):
@@ -72,103 +72,6 @@ class _netG(nn.Module):
         return x
 
 
-class _netG_stylegan(nn.Module):
-    """Generator of type in Karras et al 2019 Improved Style GAN
-        https://arxiv.org/pdf/1812.04948.pdf
-    """
-    def __init__(self, nz, ngf, nc = 1, resks = 3, nw=200):
-        super(_netG_stylegan, self).__init__()
-        self.nz = nz
-        self.ngf = ngf
-        self.nc = nc
-        self.lnormlist = nn.ModuleList([nn.LayerNorm([ngf * 8, 3, 3]),
-                          nn.LayerNorm([ngf * 4, 8, 4]),
-                          nn.LayerNorm([ngf * 4, 8, 4]),
-                          nn.LayerNorm([ngf * 4, 8, 4]),
-                          nn.LayerNorm([ngf * 2, 31, 5]),
-                          nn.LayerNorm([ngf * 2, 31, 5]),
-                          nn.LayerNorm([ngf * 2, 31, 5]),
-                          nn.LayerNorm([ngf, 63, 8])
-                         ])
-        # layer wise scaling on noise
-        self.B = torch.exp(torch.randn(7))
-        # in style Gan
-        self.W_net = nn.Sequential(
-                        nn.Linear(nz, 100),
-                        nn.ReLU(True),
-                        nn.Linear(100, 100),
-                        nn.ReLU(True),
-                        nn.Linear(100, 200)
-        )
-        self.layer_maps = nn.ModuleList([ nn.Linear(nw, ngf*8*2),
-                                        nn.Linear(nw, ngf*4*2),
-                                        nn.Linear(nw, ngf*4*2),
-                                        nn.Linear(nw, ngf*4*2),
-                                        nn.Linear(nw, ngf*4*2),
-                                        nn.Linear(nw, ngf*2*2),
-                                        nn.Linear(nw, ngf*2*2),
-                                        nn.Linear(nw, ngf*2*2),
-                                        nn.Linear(nw, ngf*2)]
-                                       )
-        self.relu = nn.ReLU(True)
-        self.convs = nn.ModuleList([
-                      nn.ConvTranspose2d(nz, ngf * 8, kernel_size=(3,3), stride=1, padding=0, bias=False),
-                      
-                      nn.ConvTranspose2d(ngf*8, ngf * 4, kernel_size=(4, 4), stride=(3, 1), padding=(1, 1), bias=False),
-                      
-                      nn.ConvTranspose2d(ngf*4, ngf*4, kernel_size = resks, stride = 1, padding = resks//2,
-                                            bias = True),
-                      nn.ConvTranspose2d(ngf*4, ngf*4, kernel_size = resks, stride = 1, padding = resks//2,
-                                            bias = True),
-                      nn.ConvTranspose2d(ngf*4, ngf * 2, kernel_size=(5, 4), stride=(4, 1),
-                               padding=(1, 1), bias=False),
-                      nn.ConvTranspose2d(ngf*2, ngf*2, kernel_size = resks, stride = 1, padding = resks//2,
-                                            bias = True),
-                      nn.ConvTranspose2d(ngf*2, ngf*2, kernel_size = resks, stride = 1, padding = resks//2,
-                                            bias = True),
-                      nn.ConvTranspose2d(ngf * 2, ngf, kernel_size=(5, 4), stride=(2, 1), padding=(1, 0),
-                               bias=False),
-                      nn.ConvTranspose2d(ngf, nc, kernel_size=(5, 4), stride=(2, 2), padding=(0,1),
-                               bias=True)
-                      ])
-        self.activation_last = nn.Softplus()
-        self.nlayers = len(self.convs)
-    
-    def normalize_rescale_add_noise(self, x, w, noise, idx):
-        # convolve
-        x = self.convs[idx](x)
-        # generate noise
-        noise = self.B[idx]*torch.randn_like(x)
-        # normalize the input 
-        x = self.lnormlist(x)
-        # go over channels
-        A = self.layer_maps[idx](w)
-        
-    def forward(self, z):
-        # w mapping
-        w = self.W_net(z)
-        # 
-        x = z.view(z.size(0),self.nz,1,1)
-        # generate 
-        # layer 1 and 2
-        x = self.convs[0](x)
-        
-        
-        x = self.relu(self.convs[1](x))
-        # resblock 1 
-        h = self.relu(self.lnormlist[2](self.convs[2](x)))
-        h = self.relu(self.lnormlist[3](self.convs[3](h)))
-        x = x + h + self.B[0]*noise
-        x = self.relu(self.lnormlist[4](self.convs[4](x)))
-        # resblock 2 
-        h = self.relu(self.lnormlist[5](self.convs[5](x)))
-        h = self.relu(self.lnormlist[6](self.convs[6](h)))
-        x = x + h
-        x = self.relu(self.lnormlist[7](self.convs[7](x)))
-        x = self.convs[8](x)
-        x = self.activation_last(x)
-        return x
-    
     
 class _netE(nn.Module):
     def __init__(self, nz, ngf, nc = 1, resks = 3):
@@ -269,7 +172,7 @@ class InceptionNet(nn.Module):
     """A discriminator network from which fid_score can be computed
         Inputs are assumed to be spectrogram chunks.
     """
-    def __init__(self, ndf, nc, lr=1e-4, l2=1e-4, log_every=100):
+    def __init__(self, ndf, nc, lr=1e-4, l2=1e-4, log_every=100, cuda_device='cuda:0'):
         super(InceptionNet, self).__init__()
         
         self.convs = nn.ModuleList([
@@ -298,6 +201,7 @@ class InceptionNet(nn.Module):
         self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=l2, betas = (0.5, 0.9))
         self.costfunc = nn.BCELoss()
         self.log_every = log_every
+        self.device = torch.device(cuda_device)
         
     def get_middle_layer(self, x):
         for i in range(4):
@@ -327,7 +231,9 @@ class InceptionNet(nn.Module):
         
         N = len(traindataloader)
         for i, batch in enumerate(traindataloader):
+            
             x, y = batch
+            x, y = x.to(self.device), y.to(self.device)
             
             yhat = self.forward(x)
             
@@ -340,6 +246,8 @@ class InceptionNet(nn.Module):
             if i % self.log_every == 0:
                 print('..... batch=%d/%d loss = %.3f .....'%(i,N,float(loss.detach())))
                 
+    
+    
     
     
 from scipy.linalg import sqrtm
@@ -365,10 +273,13 @@ def FID(x_real, x_hat):
     cov_real = np.cov(x_real, rowvar=False)
     cov_hat = np.cov(x_hat, rowvar=False)
     
+    cov_real_sqrt = sqrtm(cov_real)
+    
     term1 = np.sum((mu_real - mu_hat)**2)
     # taking the absolute value here gets rid of the small imaginary part 
     try:
-        term2 = np.trace(cov_real + cov_hat - 2*np.abs(sqrtm(cov_real @ cov_hat)))
+        term2 = np.trace(cov_real + cov_hat \
+                         - 2*sqrtm(cov_real_sqrt @ (cov_hat @ cov_real_sqrt)))
     except:
         term2 = np.nan
     return term1 + term2

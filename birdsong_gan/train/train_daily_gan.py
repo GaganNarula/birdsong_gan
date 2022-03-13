@@ -32,7 +32,7 @@ from models.nets_16col_residual import _netD, _netE, _netG, InceptionNet, weight
 from reconstruction_error.pca import learn_pca_model
 
 from hmm.hmm import learnKmodels_getbest
-from hmm.hmm_utils import munge_sequences, full_entropy, create_output, number_of_active_states_viterbi, hmm_num_params
+from hmm.hmm_utils import munge_sequences, full_entropy, create_output, number_of_active_states_viterbi, hmm_num_free_params
 from utils.utils import overlap_encode, overlap_decode, gagan_save_spect, save_audio_sample, \
     rescale_spectrogram, make_output_folder
 
@@ -750,7 +750,7 @@ def main():
         for k in range(len(opts['hidden_state_size'])):
             
             K = opts['hidden_state_size'][k]
-            num_params = hmm_num_params(K, opts['nz'], covariance_type=opts['covariance_type'])
+            num_params = hmm_num_free_params(K, opts['nz'], covariance_type=opts['covariance_type'])
             
             if tot_pts < num_params:
                 print(f'..... too few data points to learn an hmm with {K} states, skipping to next.....')
@@ -771,7 +771,7 @@ def main():
     for k in range(len(opts['hidden_state_size'])):
             
         K = opts['hidden_state_size'][k]
-        num_params = hmm_num_params(K, opts['nz'], covariance_type=opts['covariance_type'])
+        num_params = hmm_num_free_params(K, opts['nz'], covariance_type=opts['covariance_type'])
 
         if tot_pts < num_params:
             print(f'..... too few data points to learn an hmm with {K} states, skipping to next.....')

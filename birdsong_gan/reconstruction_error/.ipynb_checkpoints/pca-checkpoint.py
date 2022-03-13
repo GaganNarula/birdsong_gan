@@ -1,6 +1,6 @@
 import numpy as np
 from sklearn.decomposition import PCA
-
+import pdb
 
 def learn_pca_model(X, n_components = 0.97, random_state = 0):
     """Learn PCA model on spectrogram chunks
@@ -22,16 +22,14 @@ def learn_pca_model(X, n_components = 0.97, random_state = 0):
     return pca
 
 
-def pca_encode(X, pca):
+def pca_encode(x, pca):
     """Project on learned principal components """
-    Xpca = [pca.transform(x.flatten()) for x in X]
-    return Xpca
+    return pca.transform(x.flatten().reshape(1,-1))
 
 
-def pca_decode(Xpca, pca, imageH = 129, imageW = 16):
+def pca_decode(x, pca, imageH = 129, imageW = 16):
     """Project back to input space """
-    X = [pca.inverse_tranform(x).reshape((imageH,imageW)) for x in X]
-    return X
+    return pca.inverse_transform(x).reshape((imageH,imageW))
 
 
 def split_song_sequence(x, chunk_len = 16):
@@ -75,8 +73,8 @@ def reconstruction(X, model = None, n_components = 0.97, random_state = 0,
         if type(X[i]) == list:
             recon = []
             for k in range(len(X[i])):
-                xhat = pca_decode(pca_encode(X[i][k], model, imageH,
-                                            chunk_len))
+                xhat = pca_decode(pca_encode(X[i][k], model), 
+                                 model, imageH, chunk_len)
                 recon.append(xhat)
             # reconstruct a single song
             recon = np.concatenate(recon,axis=-1)
