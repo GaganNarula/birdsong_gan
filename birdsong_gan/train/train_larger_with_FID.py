@@ -483,30 +483,30 @@ def main():
 
 
                     # randomly sample a file and save audio sample
-                    sample = sample_dataset.get_random_item()[0] # first element of list output 
+                    sample = sample_dataset.get_random_item()
                     
-                    # audio
+                    ## get audio of original
                     if opts_dict['get_audio']:
                         try:
-                            save_audio_sample(lc.istft(inverse_transform(transform(sample))), \
+                            save_audio_sample(lc.istft(inverse_transform(sample)), \
                                                   '%s/input_audio_epoch_%03d_batchnumb_%d.wav' % 
                                                   (opts_dict['outf'], epoch, i), opts_dict['sample_rate'])
                         except:
                             print('..audio buffer error, skipped audio file generation')
 
-                    # save original spectrogram
+                    ## save original spectrogram
                     gagan_save_spect('%s/input_spect_epoch_%03d_batchnumb_%d.eps'
-                                         % (opts_dict['outf'], epoch, i), 
-                                         rescale_spectrogram(sample))
-                    # save reconstruction
-                    zvec = overlap_encode(sample, netE, transform_sample = False, imageW = opts_dict['imageW'],
+                                         % (opts_dict['outf'], epoch, i), rescale_spectrogram(sample.numpy()))
+                    
+                    ## save reconstruction
+                    zvec = overlap_encode(sample.numpy(), netE, transform_sample = False, imageW = opts_dict['imageW'],
                                            noverlap = opts_dict['noverlap'], cuda = opts_dict['cuda'])
                     spect, audio = overlap_decode(zvec, netG, noverlap = opts_dict['noverlap'], get_audio = opts_dict['get_audio'], 
                                                   cuda = opts_dict['cuda'])
-                    # save reconstructed spectrogram
                     spect = rescale_spectrogram(spect)
                     gagan_save_spect('%s/rec_spect_epoch_%03d_batchnumb_%d.eps' % (opts_dict['outf'], epoch, i), spect)
                     
+                    ## get audio of reconstruction
                     if opts_dict['get_audio']:
                         try:
                             save_audio_sample(audio,'%s/rec_audio_epoch_%03d_batchnumb_%d.wav' % 

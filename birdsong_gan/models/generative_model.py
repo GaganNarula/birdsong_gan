@@ -112,7 +112,7 @@ class GaussHMMGAN:
         return overlap_encode(x, self.netE,
                               transform_sample,
                               imageW=self.chunk_len,
-                              noverlap=False, cuda=cuda)
+                              noverlap=0, cuda=cuda)
     
     def decode(self, z, noverlap=0, cuda=True):
            

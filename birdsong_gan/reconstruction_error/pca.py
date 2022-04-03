@@ -38,6 +38,7 @@ def split_song_sequence(x, chunk_len = 16):
     idx = 0
     for n in range(nchunks):
         X.append(x[:,idx : idx + chunk_len])
+        idx += chunk_len
     return X
 
 
