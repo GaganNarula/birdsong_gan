@@ -1,9 +1,10 @@
 import torch
 import numpy as np
-from models.nets_16col_residual import _netG, _netE
+from birdsong_gan.models.nets_16col_residual import _netG, _netE
 from hmmlearn.hmm import GaussianHMM
-from utils.utils import load_netG, load_netE, overlap_encode, overlap_decode
-from hmm.hmm_utils import tempered_sampling
+from birdsong_gan.utils.utils import overlap_encode, overlap_decode, inverse_transform
+from birdsong_gan.hmm.hmm_utils import tempered_sampling
+import librosa as lc
 import joblib
 import pdb
 from typing import List
@@ -77,6 +78,127 @@ def generate_samples(netG, hmm, nsamples=1, invtemp=1., timesteps=[], cuda=True)
 
 
 
+
+def load_netG(netG_file_path, nz = 16, ngf = 128, nc = 1, cuda = False, resnet = False):
+    """Load the generator network
+    
+        Params
+        ------
+            netG_file_path : str, location of decoder/generator network file (torch state_dict)
+            nz : int, number of latent dimensions
+            ngf : int, multiplier of number of filters per conv layers
+            nc : int, (leave 1) number of channels (usually just gray-scale)
+            cuda : bool, whether to put on gpu (default device 0)
+            resnet : bool, whether this is a resnet type model
+        
+        Returns
+        -------
+            netG : decoder network
+    """
+    if resnet:
+        from birdsong_gan.models.nets_16col_residual import _netG
+    else:
+        from birdsong_gan.models.nets_16col_layernorm import _netG
+        
+    netG = _netG(nz, ngf, nc)
+    netG.load_state_dict(torch.load(netG_file_path))
+
+    if cuda:
+        netG = netG.cuda()
+    return netG
+
+
+
+
+def load_netE(netE_file_path, nz = 16, ngf = 128, nc = 1, cuda = False, resnet = False):
+    """Load the encoder network
+    
+        Params
+        ------
+            netE_file_path : str, location of encoder network file (torch state_dict)
+            nz : int, number of latent dimensions
+            ngf : int, multiplier of number of filters per conv layers
+            nc : int, (leave 1) number of channels (usually just gray-scale)
+            cuda : bool, whether to put on gpu (default device 0)
+            resnet : bool, whether this is a resnet type model
+        
+        Returns
+        -------
+            netE : encoder network
+    """
+    if resnet:
+        from birdsong_gan.models.nets_16col_residual import _netE
+    else:
+        from birdsong_gan.models.nets_16col_layernorm import _netE
+        
+    netE = _netE(nz, ngf, nc)
+    netE.load_state_dict(torch.load(netE_file_path))
+
+    if cuda:
+        netE = netE.cuda()
+    return netE
+
+
+
+def load_netD(netD_file_path, ndf = 128, nc = 1, cuda = False, resnet = False):
+    """Load the discriminator network
+    
+        Params
+        ------
+            netD_file_path : str, location of encoder network file (torch state_dict)
+            ndf : int, multiplier of number of filters per conv layers
+            nc : int, (leave 1) number of channels (usually just gray-scale)
+            cuda : bool, whether to put on gpu (default device 0)
+            resnet : bool, whether this is a resnet type model
+        
+        Returns
+        -------
+            netE : encoder network
+    """
+    if resnet:
+        from birdsong_gan.models.nets_16col_residual import _netD
+    else:
+        from birdsong_gan.models.nets_16col_layernorm import _netD
+        
+    netD = _netD(ndf, nc)
+    netD.load_state_dict(torch.load(netD_file_path))
+
+    if cuda:
+        netD = netD.cuda()
+    return netD
+
+
+
+def load_InceptionNet(inception_net_file_path, ndf = 128, nc = 1, cuda = False, resnet = False):
+    """Load the inception discriminator network
+    
+        Params
+        ------
+            inception_net_file_path : str, location of encoder network file (torch state_dict)
+            ndf : int, multiplier of number of filters per conv layers
+            nc : int, (leave 1) number of channels (usually just gray-scale)
+            cuda : bool, whether to put on gpu (default device 0)
+            resnet : bool, whether this is a resnet type model
+        
+        Returns
+        -------
+            netE : encoder network
+    """
+    if resnet:
+        from birdsong_gan.models.nets_16col_residual import InceptionNet
+    else:
+        from birdsong_gan.models.nets_16col_layernorm import InceptionNet
+        
+    netI = InceptionNet(ndf, nc)
+    netI.load_state_dict(torch.load(inception_net_file_path))
+
+    if cuda:
+        netI = netI.cuda()
+    return netI
+
+
+
+
 class GaussHMMGAN:
     
     netG: _netG # decoder / generator network
@@ -100,6 +222,9 @@ class GaussHMMGAN:
         
         self.netG = load_netG(netGpath, nz=self.nz, ngf=ngf, resnet=True, cuda=False)
         self.netE = load_netE(netEpath, nz=self.nz, ngf=ngf, resnet=True, cuda=False)
+        self.netG.eval()
+        self.netE.eval()
+        
         self._to_cuda()
         
     def _to_cuda(self):
@@ -141,7 +266,7 @@ class GaussHMMGAN:
     
     def generate_audio(self, sample_spectrograms: List[np.ndarray]):
         
-        X_audio = [None for _ in range(len(sample_spectrograms))]
+        X_audio = []
         
         for s in sample_spectrograms:
             # griffin lim
