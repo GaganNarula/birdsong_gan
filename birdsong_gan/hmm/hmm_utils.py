@@ -4,7 +4,7 @@ from hmmlearn.hmm import GaussianHMM, GMMHMM
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from utils.utils import transform, inverse_transform, save_audio_sample, rescale_spectrogram, overlap_encode, overlap_decode
+from birdsong_gan.utils.utils import transform, inverse_transform, save_audio_sample, rescale_spectrogram, overlap_encode, overlap_decode
 import argparse
 import joblib
 from joblib import Parallel, delayed
