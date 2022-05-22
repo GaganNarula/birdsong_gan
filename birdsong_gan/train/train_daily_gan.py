@@ -1,8 +1,4 @@
-
-import sys
 import os
-sys.path.append(os.pardir)
-
 import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
@@ -25,15 +21,15 @@ import pdb
 import json
 
 
-from configs.cfg import *
-from data.dataset import bird_dataset_single_hdf, transform, inverse_transform
-from models.nets_16col_residual import _netD, _netE, _netG, InceptionNet, weights_init
+from birdsong_gan.configs.cfg import *
+from birdsong_gan.data.dataset import bird_dataset_single_hdf, transform, inverse_transform
+from birdsong_gan.models.nets_16col_residual import _netD, _netE, _netG, InceptionNet, weights_init
 
-from reconstruction_error.pca import learn_pca_model
+from birdsong_gan.reconstruction_error.pca import learn_pca_model
 
-from hmm.hmm import learnKmodels_getbest
-from hmm.hmm_utils import munge_sequences, full_entropy, create_output, number_of_active_states_viterbi, hmm_num_free_params
-from utils.utils import overlap_encode, overlap_decode, gagan_save_spect, save_audio_sample, \
+from birdsong_gan.hmm.hmm import learnKmodels_getbest
+from birdsong_gan.hmm.hmm_utils import munge_sequences, full_entropy, create_output, number_of_active_states_viterbi, hmm_num_free_params
+from birdsong_gan.utils.utils import overlap_encode, overlap_decode, gagan_save_spect, save_audio_sample, \
     rescale_spectrogram, make_output_folder
 
 
@@ -623,8 +619,8 @@ parser.add_argument('--netD2',type = str, default = '', help='path to encoder ne
 parser.add_argument('--netD3',type = str, default = '', help='path to encoder network file')
 parser.add_argument('--min_num_batches', type=int, default = 50, help='minimum number of minibatches')
 # for HMM
-parser.add_argument('--hidden_state_size', type = int, nargs = '+', default = [5, 10, 15, 20, 30, 50, 75, 100])
-parser.add_argument('--covariance_type', type = str, default = 'spherical')
+parser.add_argument('--hidden_state_size', type = int, nargs = '+', default = [5, 10, 12, 15, 20, 25, 30, 40, 50, 60, 100])
+parser.add_argument('--covariance_type', type = str, default = 'diag')
 parser.add_argument('--covars_prior', type = float, default = 1., help ='diagnoal term weight on the prior covariance')
 parser.add_argument('--fit_params', type = str, default = 'stmc',
                     help = 'which parameters to fit, s = startprob, t = transmat, m = means, c = covariances')

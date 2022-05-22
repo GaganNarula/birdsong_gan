@@ -204,29 +204,29 @@ def main():
     netG = _netG(nz, ngf, nc)
     netG.apply(weights_init)
     if opts_dict['netGpath'] != '':
-        netG.load_state_dict(torch.load(opts_dict['netG']))
+        netG.load_state_dict(torch.load(opts_dict['netGpath']))
     
     netD1 = _netD(ndf,nc)
     netD1.apply(weights_init)
     if opts_dict['netD1path'] != '':
-        netD1.load_state_dict(torch.load(opts_dict['netD1']))
+        netD1.load_state_dict(torch.load(opts_dict['netD1path']))
 
     netD2 = _netD(ndf,nc)
     netD2.apply(weights_init)
     if opts_dict['netD2path'] != '':
-        netD2.load_state_dict(torch.load(opts_dict['netD2']))
+        netD2.load_state_dict(torch.load(opts_dict['netD2path']))
     
     # inception net
     netD3 = InceptionNet(ndf,nc)
     netD3.apply(weights_init)
     if opts_dict['netD3path'] != '':
-        netD3.load_state_dict(torch.load(opts_dict['netD2']))
+        netD3.load_state_dict(torch.load(opts_dict['netD3path']))
         
         
     netE = _netE(nz, ngf, nc)
     netE.apply(weights_init)
     if opts_dict['netEpath'] != '':
-        netE.load_state_dict(torch.load(opts_dict['netE']))
+        netE.load_state_dict(torch.load(opts_dict['netEpath']))
     
     if opts_dict['cuda']:
         netD1 = netD1.cuda()
@@ -537,8 +537,8 @@ def main():
         # do checkpointing of models
         torch.save(netG.state_dict(), '%s/netG_epoch_%d.pth' % (opts_dict['outf'], epoch))
         # saving the discriminators is not necessary, uncomment if you want them
-        #torch.save(netD1.state_dict(), '%s/netD1_epoch_%d.pth' % (opts_dict['outf'], epoch))
-        #torch.save(netD2.state_dict(), '%s/netD2_epoch_%d.pth' % (opts_dict['outf'], epoch))
+        torch.save(netD1.state_dict(), '%s/netD1_epoch_%d.pth' % (opts_dict['outf'], epoch))
+        torch.save(netD2.state_dict(), '%s/netD2_epoch_%d.pth' % (opts_dict['outf'], epoch))
         torch.save(netD3.state_dict(), '%s/netD3_epoch_%d.pth' % (opts_dict['outf'], epoch))
         torch.save(netE.state_dict(), '%s/netE_epoch_%d.pth' % (opts_dict['outf'], epoch))
         
@@ -554,7 +554,7 @@ def main():
                 pca_model = learn_pca_model(Xpca, opts_dict['npca_components'], 
                                             random_state = opts_dict['manualSeed'])
                 print('///// PCA model learned, %d components /////'%(pca_model.n_components_))
-                del Xpca
+                Xpca = []
                 gc.collect()
                 joblib.dump({'pca_model':pca_model}, os.path.join(opts_dict['outf'],'pca_model.pkl'))
         
