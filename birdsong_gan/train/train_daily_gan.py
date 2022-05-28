@@ -45,7 +45,7 @@ gan_opts = {'datapath': '', 'outf': '', 'birdname':'',
             'sample_rate': 16000.,'noise_dist': 'normal','z_var': 1.,'nfft': 256, 'get_audio': False,
             'min_num_batches': 50, 'make_run_folder': False, 'model_checkpoint_every': 3,
             'manualSeed': [], 'do_pca': True, 'npca_samples': 1e6, 'npca_components': 0.98,
-           'get_FID_score': False, 'train_all_days': False}
+           'get_FID_score': False, 'train_all_days': False, 'skip_network_training': False}
 
 hmm_opts = {'hidden_state_size' : [5, 10, 15, 20, 30, 50, 75, 100], 'covariance_type' : 'spherical', 
            'fit_params' : 'stmc', 'transmat_prior' : 1., 'n_iter' : 300, 'tolerance' : 0.01,
@@ -590,6 +590,7 @@ parser.add_argument('--chain_networks', action='store_true', help='whether to in
 parser.add_argument('--batchSize', type=int, default=128, help='input batch size')
 parser.add_argument('--nz', type=int, default=32, help='size of the latent z vector')
 parser.add_argument('--train_residual', action = 'store_true')
+parser.add_argument('--skip_network_training', action='store_true', help="if True, uses provided paths to networks and does not train")
 parser.add_argument('--train_all_days', action = 'store_true', help='if True, trains single net on all spectrograms from all days')
 parser.add_argument('--make_run_folder', action = 'store_true', help='if True, will create a run folder to save results')
 parser.add_argument('--noise_dist', type=str, default = 'normal', help='noise distribution: {normal, uniform, t}')
@@ -682,14 +683,15 @@ def main():
         # just make the folder 
         if not os.path.exists(opts['outf']):
             os.makedirs(opts['outf'])
-    
+    # set output directory for run
     model.outpath = opts['outf']
         
+    # save options dict
     with open(join(opts['outf'], 'opts.json'), 'w') as file:
         json.dump(opts, file)
         
         
-    if opts['train_all_days']:
+    if not opts["skip_network_training"] and opts['train_all_days']:
         # train on all days from this bird
         traindataloader = model.make_single_dataloader()
         model.train_network(traindataloader)
@@ -700,6 +702,8 @@ def main():
         model.netD3 = None
         gc.collect()
         
+        
+    # train over days
     for day in range(opts['start_from_day'], end_at):
         
         print('\n\n.... ### WORKING ON DAY %d for bird %s ### .....'%(day, opts['birdname']))
@@ -714,11 +718,11 @@ def main():
         model.outpath = outpath
 
         # re-initialize networks
-        if day > 0 and not opts['chain_networks'] and not opts['train_all_days']:
+        if day > 0 and not opts["skip_network_training"] and not opts['chain_networks'] and not opts['train_all_days']:
             model._init_networks()
 
         
-        if not opts['train_all_days']:
+        if not opts["skip_network_training"] and not opts['train_all_days']:
             
             # make daily traindataloader
             traindataloader = model.make_daily_dataloader(day)
@@ -732,6 +736,8 @@ def main():
             # train networks
             model.train_network(traindataloader, day)
          
+        
+        ##### HMM LEARNING #####
         # compute and encode spectrograms 
         model.compute_latent_vectors(day)
         
@@ -757,12 +763,13 @@ def main():
         # clear the saved spectrogram and latent vectors arrays
         model.X = None 
         model.Z = None
-        
+        gc.collect()
+        torch.cuda.empty_cache()
         
     
     # last is tutor
     print('..... now learning tutor model .....')
-    model.compute_latent_vectors(day = 'tutor')
+     
     
     for k in range(len(opts['hidden_state_size'])):
             
