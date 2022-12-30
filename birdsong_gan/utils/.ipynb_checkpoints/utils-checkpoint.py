@@ -10,6 +10,7 @@ import fnmatch
 import shutil
 import soundfile as sf
 import torch
+from typing import List
 from datetime import datetime
 import matplotlib.pyplot as plt
 plt.rcParams.update({'font.size': 16})
@@ -417,6 +418,19 @@ def gagan_save_spect(path, spect, frmat='eps'):
     plt.savefig(path, dpi=100, format=frmat)
     plt.close()
     
+    
+    
+    
+def plot_spectrograms(spectrograms: List[np.ndarray], figsize=(20,15)):
+    
+    fig, ax = plt.subplots(nrows=len(spectrograms), figsize=figsize)
+    for i in range(len(spectrograms)):
+        ax[i].imshow(rescale_spectrogram(spectrograms[i]), origin='lower', cmap='gray')
+    
+    return fig
+        
+        
+        
     
 def make_output_folder(path):
     if not os.path.exists(path):
