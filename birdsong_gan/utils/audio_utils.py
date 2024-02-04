@@ -114,3 +114,17 @@ def plot_spectrograms(
             spect = rescale_spectrogram(spectrograms[i])
         ax.imshow(spect, origin="lower", cmap=cmap)
     return fig
+
+
+def play_audio_sounddevice(audio: np.ndarray, sr: int) -> None:
+    """Play audio using sounddevice.
+
+    :param audio: input audio sequence
+    :type audio: np.ndarray
+    :param sr: sample rate
+    :type sr: int
+    """
+    import sounddevice as sd
+
+    sd.play(audio, samplerate=sr)
+    sd.wait()
