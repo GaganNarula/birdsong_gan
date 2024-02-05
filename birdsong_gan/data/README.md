@@ -1,0 +1,4 @@
+# Create your own HuggingFace style dataset with your birdsong data!
+
+## 1. Organize your files.
+The best way to do this is to create one folder for each bird / experiment, and then subfolders for each day / session of recording. For example, if you have 3 birds, and each bird has 2 sessions of recording, you should have 6 folders, each with a name like `bird1_session1`, `bird1_session2`, `bird2_session1`, etc. Each of these folders should contain the audio files for that session. The audio files should be in `.wav` format, and should be named with the following convention: `bird1_session1_0001.wav`, `bird1_session1_0002.wav`, `bird1_session1_0003.wav`, etc. The first part of the filename should be the name of the folder, and the last part should be a 4-digit number, with leading zeros if necessary. The number should be incremented for each audio file in the folder.

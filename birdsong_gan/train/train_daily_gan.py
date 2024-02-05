@@ -72,9 +72,6 @@ cudnn.benchmark = True
 #cudnn.allow_tf32 = True
 
 
-    
-
-
 # useful to flip labels randomly
 def true_wp(prob, size, device):
     # generate a uniform random number

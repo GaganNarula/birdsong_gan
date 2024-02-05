@@ -30,7 +30,10 @@ def get_bird_subset(
 
 
 def get_age_range_subset(
-    ds: Dataset, dph_lower: int = 30, dph_upper: int = 1000, age_column: str = "age"
+    ds: Dataset,
+    dph_lower: int = 30,
+    dph_upper: int = 1000,
+    age_column: str = "days_post_hatch",
 ) -> Dataset:
     """Get subset of dataset for a specific age."""
     ages = np.array(ds[age_column])
@@ -87,16 +90,26 @@ class DataExplorer:
         """Load dataset from disk."""
         self.ds = load_from_disk(path_to_dataset)
 
-    def get_random_sample(self, seed: int = 0, n: int = 1) -> Union[Dataset, dict]:
+    def get_random_sample(
+        self, seed: int = 0, n: int = 1, ds: Dataset = None
+    ) -> Union[Dataset, dict]:
         """Get random sample from dataset."""
+        if ds is not None:
+            get_random_sample(ds, seed, n)
         return get_random_sample(self.ds, seed, n)
 
-    def get_all_unique_values(self, column: str) -> list[Any]:
+    def get_all_unique_values(self, column: str, ds: Dataset = None) -> list[Any]:
         """Get all unique values in a column."""
+        if ds is not None:
+            return get_all_unique_values(ds, column)
         return get_all_unique_values(self.ds, column)
 
-    def get_bird_subset(self, bird: str, bird_name_column: str = "bird_name") -> None:
+    def get_bird_subset(
+        self, bird: str, bird_name_column: str = "bird_name", ds: Dataset = None
+    ) -> Dataset:
         """Get subset of dataset for a specific bird."""
+        if ds is not None:
+            return get_bird_subset(ds, bird, bird_name_column)
         return get_bird_subset(self.ds, bird, bird_name_column)
 
     def get_age_range_subset(
@@ -104,8 +117,11 @@ class DataExplorer:
         dph_lower: int = 30,
         dph_upper: int = 1000,
         age_column: str = "days_post_hatch",
+        ds: Dataset = None,
     ) -> Dataset:
         """Get subset of dataset for a specific age."""
+        if ds is not None:
+            return get_age_range_subset(ds, dph_lower, dph_upper, age_column)
         return get_age_range_subset(self.ds, dph_lower, dph_upper, age_column)
 
     def get_recording_date_subset(
@@ -113,6 +129,9 @@ class DataExplorer:
         time_lower: Union[str, datetime.datetime],
         time_upper: Union[str, datetime.datetime],
         date_column: str = "recording_date",
+        ds: Dataset = None,
     ) -> Dataset:
         """Get subset of dataset for a specific recording date."""
+        if ds is not None:
+            return get_recording_date_subset(ds, time_lower, time_upper, date_column)
         return get_recording_date_subset(self.ds, time_lower, time_upper, date_column)

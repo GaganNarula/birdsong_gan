@@ -2,4 +2,5 @@
 **/configs
 **/__pycache__
 **/.ipynb_checkpoints
+# ignore all .ipynb_checkpoints folders
 .ipynb_checkpoints
