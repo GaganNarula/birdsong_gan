@@ -128,3 +128,25 @@ def play_audio_sounddevice(audio: np.ndarray, sr: int) -> None:
 
     sd.play(audio, samplerate=sr)
     sd.wait()
+
+
+def random_time_crop_spectrogram(
+    spectrogram: np.array,
+    crop_length: int,
+) -> np.array:
+    """Randomly crop a spectrogram in the time dimension.
+
+    :param spectrogram: input spectrogram, shape (nfft//2, timeframes)
+    :type spectrogram: np.array
+    :param crop_length: length of the crop
+    :type crop_length: int
+    :return: cropped spectrogram
+    :rtype: np.array
+    """
+    n = spectrogram.shape[1]
+    if n < crop_length:
+        raise ValueError(
+            "Crop length should be less than the time dimension of the spectrogram"
+        )
+    start = np.random.randint(0, n - crop_length)
+    return spectrogram[:, start : start + crop_length]
