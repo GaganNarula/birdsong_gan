@@ -1,5 +1,7 @@
 """A Vector Quantized Variational Autoencoder (VQ-VAE) for training on bird song spectrograms."""
 
+import os
+import json
 from dataclasses import dataclass
 import torch
 import numpy as np
@@ -255,9 +257,9 @@ def main():
         in_channels=1,
         out_channels=1,
         latent_channels=1,
-        num_embeddings=config.num_vq_embeddings,
-        embed_dim=config.vq_embed_dim,
-        num_layers=config.layers_per_block,
+        num_vq_embeddings=config.num_vq_embeddings,
+        vq_embed_dim=config.vq_embed_dim,
+        layers_per_block=config.layers_per_block,
         sample_size=config.batch_size,
     )
     num_params = model.num_parameters()
@@ -275,6 +277,10 @@ def main():
 
     # INIT PROJECT
     wandb.init(project="vqvae", config=vars(config), dir=experiment_dir)
+
+    # save config
+    with open(os.path.join(experiment_dir, "experiment_config.json"), "w") as f:
+        json.dump(vars(config), f)
 
     for epoch in range(config.num_epochs):
 
