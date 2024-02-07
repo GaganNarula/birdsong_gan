@@ -2,6 +2,8 @@
 
 import os
 import json
+import argparse
+from datetime import datetime
 from dataclasses import dataclass
 import torch
 import numpy as np
@@ -10,7 +12,10 @@ from datasets import load_from_disk
 from diffusers import VQModel
 from torch.utils.data import DataLoader
 import wandb
-from birdsong_gan.utils.audio_utils import random_time_crop_spectrogram
+from birdsong_gan.utils.audio_utils import (
+    random_time_crop_spectrogram,
+    rescale_spectrogram,
+)
 
 
 l2loss = torch.nn.MSELoss()
@@ -18,9 +23,6 @@ l2loss = torch.nn.MSELoss()
 
 def make_experiment_dir(base_path: str) -> str:
     """Create an experiment directory."""
-    import os
-    from datetime import datetime
-
     now = datetime.now()
     dt_string = now.strftime("%Y-%m-%d_%H-%M-%S")
     experiment_dir = os.path.join(base_path, dt_string)
@@ -35,10 +37,13 @@ class TrainingConfig:
     lr: float = 2e-5
     batch_size: int = 200
     gradient_accumulation_steps: int = 1
-    alpha: float = 10.0
+    alpha: float = 10.0  # weight for commitment loss
+    vq_beta: float = (
+        0.25  # balances between pushing codebook to latents vs pushing latents to codebook
+    )
     weight_decay: float = 0.0
-    log_every: int = 200
-    log_rich_media_every: int = 500
+    log_every: int = 20
+    log_rich_media_every: int = 20
     num_epochs: int = 5
     num_workers: int = 4
     device: str = "cuda"
@@ -52,7 +57,14 @@ class TrainingConfig:
         "/media/gagan/Gagan_external/songbird_data/age_resampled_hfdataset/"
     )
     base_dir: str = "/home/gagan/ek_experiments/vqvae"
+    experiment_dir: str = ""  # will be set later
     checkpoint_every: int = 1000
+    check_for_unused_codes_every: int = (
+        20  # from https://proceedings.mlr.press/v202/huh23a/huh23a.pdf
+    )
+    replace_unused_codes_threshold: int = (
+        1  # from https://proceedings.mlr.press/v202/huh23a/huh23a.pdf
+    )
     max_grad_norm: float = 1.0
 
 
@@ -93,19 +105,69 @@ class SpectrogramSnippets(torch.utils.data.Dataset):
 ## Helper functions
 
 
-def plot_reconstruction_and_original(
+def plot_reconstruction_and_original_wandb(
     x: torch.Tensor, xhat: torch.Tensor, epoch: int, batch: int
 ) -> None:
     """Use wandb.plot to log original and reconstructed spectrograms.
     Input spectrgrams have shape (batch_size, nfreq, ntimeframes).
     Converts them to (nfreq, ntimeframes x batch_size) for plotting.
     """
-    x = x.view(x.shape[0], x.shape[1] * x.shape[2])
-    xhat = xhat.view(xhat.shape[0], xhat.shape[1] * xhat.shape[2])
+    x = x.squeeze()
+    x = x.view(x.shape[1], x.shape[0] * x.shape[2]).cpu().detach().numpy()
+    xhat = xhat.squeeze()
+    xhat = (
+        xhat.view(xhat.shape[1], xhat.shape[0] * xhat.shape[2]).cpu().detach().numpy()
+    )
+    x = rescale_spectrogram(x)
+    xhat = rescale_spectrogram(xhat)
     wandb.log(
         {f"reconstruction_{epoch}_{batch}": wandb.Image(xhat, caption="reconstructed")}
     )
     wandb.log({f"original_{epoch}_{batch}": wandb.Image(x, caption="original")})
+
+
+def plot_reconstruction_and_original(
+    x: torch.Tensor,
+    xhat: torch.Tensor,
+    epoch: int,
+    batch: int,
+    experiment_dir: str,
+    figsize: tuple[int, int] = (20, 6),
+) -> None:
+    """Plot original and reconstructed spectrograms.
+
+    Input spectrgrams have shape (batch_size, nfreq, ntimeframes).
+    Converts them to (nfreq, ntimeframes x batch_size) for plotting.
+
+    :param x: original spectrogram
+    :type x: torch.Tensor
+    :param xhat: reconstructed spectrogram
+    :type xhat: torch.Tensor
+    :param epoch: current epoch
+    :type epoch: int
+    :param batch: current batch
+    :type batch: int
+    :param experiment_dir: directory to save plots
+    :type experiment_dir: str
+    :param figsize: figure size, defaults to (12, 8)
+    :type figsize: tuple[int, int], optional
+
+    """
+    x = x.squeeze()
+    x = np.concatenate([xx.cpu().detach().numpy() for xx in x], axis=-1)
+    xhat = xhat.squeeze()
+    xhat = np.concatenate([xx.cpu().detach().numpy() for xx in xhat], axis=-1)
+    x = rescale_spectrogram(x)
+    xhat = rescale_spectrogram(xhat)
+    fig, axes = plt.subplots(nrows=2, ncols=1, figsize=figsize)
+    axes[0].imshow(x, origin="lower", cmap="gray")
+    axes[0].set_title("Original")
+    axes[1].imshow(xhat, origin="lower", cmap="gray")
+    axes[1].set_title("Reconstructed")
+    # Adjust the space between the subplots
+    plt.subplots_adjust(hspace=0.2)  # Adjusts the horizontal space
+    plt.savefig(os.path.join(experiment_dir, f"reconstruction_{epoch}_{batch}.png"))
+    plt.close(fig)
 
 
 def compute_histograms(indices: np.ndarray, num_embeddings: int) -> np.ndarray:
@@ -116,9 +178,41 @@ def compute_histograms(indices: np.ndarray, num_embeddings: int) -> np.ndarray:
     return histogram
 
 
-def plot_histogram_wandb(histogram) -> None:
+def plot_codebook_histogram(
+    num_embeddings: int,
+    experiment_dir: str,
+    epoch: int,
+    batch: int,
+    indices: np.ndarray = None,
+    histogram: np.ndarray = None,
+) -> None:
+    """Plot histogram of indices."""
+    if histogram is None and indices is None:
+        raise ValueError("Either indices or histogram must be provided.")
+    if histogram is None:
+        histogram = compute_histograms(indices, num_embeddings)
+    plt.bar(np.arange(num_embeddings), np.log10(histogram))
+    plt.savefig(
+        os.path.join(experiment_dir, f"codebook_log_histogram_{epoch}_{batch}.png")
+    )
+    plt.close()
+
+
+def plot_histogram_wandb(indices) -> None:
     """Use wandb.log to log histogram of indices."""
-    wandb.Histogram(np_histogram=histogram)
+    wandb.log({"codebook_histogram": wandb.Histogram(indices, num_bins=512)})
+
+
+def replace_unused_codes(
+    model, codebook_histogram: np.ndarray, threshold: int = 10
+) -> tuple[torch.nn.Module, int]:
+    """Replace unused codes in codebook with random embeddings."""
+    unused_codes = np.where(codebook_histogram < threshold)[0]
+    for code in unused_codes:
+        model.quantize.embedding.weight.data[code].uniform_(
+            -1.0 / model.num_vq_embeddings, 1.0 / model.num_vq_embeddings
+        )
+    return model.train(), len(unused_codes)
 
 
 def train(dataloader: DataLoader, model: VQModel, optimizer, epoch, config):
@@ -176,31 +270,42 @@ def train(dataloader: DataLoader, model: VQModel, optimizer, epoch, config):
                 {
                     "running_avg_L2_loss": running_avg_l2 / i,
                     "running_avg_commitment_loss": running_avg_comm / i,
-                    "L2_loss": running_avg_l2,
-                    "commitment_loss": running_avg_comm,
+                    "L2_loss": float(l2.detach()),
+                    "commitment_loss": float(commloss.detach()),
                 }
             )
 
         if (i + 1) % config.log_rich_media_every == 0:
-            plot_reconstruction_and_original(x, xhat, epoch, i)
-            encoding_indices = np.concatenate(encoding_indices)
-            histogram = compute_histograms(encoding_indices, config.num_vq_embeddings)
-            plot_histogram_wandb(histogram)
-            encoding_indices = []
+            plot_reconstruction_and_original(x, xhat, epoch, i, config.experiment_dir)
 
         if (i + 1) % config.checkpoint_every == 0:
             torch.save(
                 model.state_dict(),
-                f"vqvae_checkpoint_{epoch}_{i}.pt",
+                os.path.join(config.experiment_dir, f"model_checkpoint_{epoch}_{i}.pt"),
             )
+
+        if (i + 1) % config.check_for_unused_codes_every == 0:
+            code_histogram = compute_histograms(
+                np.concatenate(encoding_indices).flatten(), config.num_vq_embeddings
+            )
+            plot_codebook_histogram(
+                num_embeddings=config.num_vq_embeddings,
+                experiment_dir=config.experiment_dir,
+                epoch=epoch,
+                batch=i,
+                histogram=code_histogram,
+            )
+            model, num_codes_replaced = replace_unused_codes(
+                model, code_histogram, config.replace_unused_codes_threshold
+            )
+            print(f"Replaced {num_codes_replaced} unused codes.")
+            encoding_indices = []
 
     return model
 
 
 def main():
     """Main function for training VQ-VAE."""
-
-    import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--lr", type=float, default=None)
@@ -221,6 +326,8 @@ def main():
     parser.add_argument("--layers_per_block", type=int, default=None)
     parser.add_argument("--dataset_path", type=str, default=None)
     parser.add_argument("--base_dir", type=str, default=None)
+    parser.add_argument("--checkpoint_every", type=int, default=None)
+    parser.add_argument("--max_grad_norm", type=float, default=None)
 
     args = parser.parse_args()
 
@@ -265,21 +372,27 @@ def main():
     num_params = model.num_parameters()
     print(f"Number of parameters in model: {num_params}")
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=config.lr, weight_decay=config.weight_decay
-    )
+    model.quantize.legacy = False  # use new quantize function
+    model.quantize.beta = config.vq_beta
 
     model.to(config.device)
     model.train()
 
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=config.lr, weight_decay=config.weight_decay
+    )
+
     experiment_dir = make_experiment_dir(config.base_dir)
+    config.experiment_dir = experiment_dir
     print(f"Experiment directory created at: {experiment_dir}")
 
     # INIT PROJECT
     wandb.init(project="vqvae", config=vars(config), dir=experiment_dir)
 
     # save config
-    with open(os.path.join(experiment_dir, "experiment_config.json"), "w") as f:
+    with open(
+        os.path.join(experiment_dir, "experiment_config.json"), "w", encoding="utf-8"
+    ) as f:
         json.dump(vars(config), f)
 
     for epoch in range(config.num_epochs):
