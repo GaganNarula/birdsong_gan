@@ -6,11 +6,14 @@ import argparse
 from datetime import datetime
 from dataclasses import dataclass
 import torch
+import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
 from datasets import load_from_disk
 from diffusers import VQModel
 from torch.utils.data import DataLoader
+from transformers import get_scheduler
+from scipy.stats import entropy
 import wandb
 from birdsong_gan.utils.audio_utils import (
     random_time_crop_spectrogram,
@@ -30,18 +33,71 @@ def make_experiment_dir(base_path: str) -> str:
     return experiment_dir
 
 
+class VQVAEModel(nn.Module):
+    """Wrap model to use new quantize function."""
+
+    def __init__(self, model, l2_normalize_latents: bool = False):
+        super().__init__()
+        self.model = model
+        self.l2_normalize_latents = l2_normalize_latents
+        self.output_activation = torch.nn.Softplus()
+
+    def encode(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Encodes input into latent space and computes nearest neighbor codevectors."""
+        ze = self.model.encode(x)
+        if self.l2_normalize_latents:
+            ze.latents = ze.latents / ze.latents.norm(dim=-1, keepdim=True)
+        zq, commloss, (perplexity, _, codes) = self.model.quantize(ze.latents)
+        return zq, commloss, codes, perplexity
+
+    def decode(self, latents: torch.Tensor) -> torch.Tensor:
+        """Decodes latents into output space."""
+        xhat = self.model.decode(latents).sample
+        xhat = self.output_activation(xhat)
+        return xhat
+
+    @torch.no_grad()
+    def infer_latent_code(self, x: torch.Tensor) -> torch.Tensor:
+        """Infer latent code for input."""
+        _, _, codes, _ = self.encode(x)
+        return codes
+
+    @torch.no_grad()
+    def reconstruct(self, x: torch.Tensor) -> torch.Tensor:
+        """Reconstruct input."""
+        zq, _, _, _ = self.encode(x)
+        return self.decode(zq)
+
+    def forward(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Forward pass. Encodes input, computes reconstruction and loss."""
+        # encode
+        zq, commloss, codes, perplexity = self.encode(x)
+        # decode
+        xhat = self.decode(zq)
+        l2 = l2loss(xhat, x)
+        return xhat, l2, commloss, codes, perplexity
+
+
 @dataclass
 class TrainingConfig:
     """Configuration for training VQ-VAE."""
 
     lr: float = 2e-5
-    batch_size: int = 200
+    scheduler: str = "cosine"
+    num_warmup_steps: int = 2000
+    num_training_steps: int = 10200
+    batch_size: int = 250
     gradient_accumulation_steps: int = 1
     alpha: float = 10.0  # weight for commitment loss
     vq_beta: float = (
         0.25  # balances between pushing codebook to latents vs pushing latents to codebook
     )
     weight_decay: float = 0.0
+    l2_normalize_latents: bool = True
     log_every: int = 20
     log_rich_media_every: int = 20
     num_epochs: int = 5
@@ -215,13 +271,90 @@ def replace_unused_codes(
     return model.train(), len(unused_codes)
 
 
-def train(dataloader: DataLoader, model: VQModel, optimizer, epoch, config):
+def logging(
+    model: torch.nn.Module,
+    x: torch.Tensor,
+    xhat: torch.Tensor,
+    encoding_indices: list[np.ndarray],
+    running_avg_comm: float,
+    running_avg_l2: float,
+    l2: float,
+    commloss: float,
+    epoch: int,
+    batch: int,
+    config,
+) -> None:
+    """Logs losses to wandb and prints / saves figures to disk, checkpoints model."""
+
+    if (batch + 1) % config.log_every == 0:
+        print(
+            f"L2 loss at epoch={epoch}, batch={batch} is = {running_avg_l2 / batch: .4f}"
+        )
+        print(
+            f"Comm loss at epoch={epoch}, batch={batch} is = {running_avg_comm / batch: .4f}"
+        )
+        # log to wandb
+        wandb.log(
+            {
+                "running_avg_L2_loss": running_avg_l2 / batch,
+                "running_avg_commitment_loss": running_avg_comm / batch,
+                "L2_loss": float(l2.detach()),
+                "commitment_loss": float(commloss.detach()),
+            }
+        )
+
+    if (batch + 1) % config.log_rich_media_every == 0:
+        plot_reconstruction_and_original(x, xhat, epoch, batch, config.experiment_dir)
+
+    if (batch + 1) % config.checkpoint_every == 0:
+        torch.save(
+            model.state_dict(),
+            os.path.join(config.experiment_dir, f"model_checkpoint_{epoch}_{batch}.pt"),
+        )
+
+    if (batch + 1) % config.check_for_unused_codes_every == 0:
+        code_histogram = compute_histograms(
+            np.concatenate(encoding_indices).flatten(), config.num_vq_embeddings
+        )
+        # plot_codebook_histogram(
+        #     num_embeddings=config.num_vq_embeddings,
+        #     experiment_dir=config.experiment_dir,
+        #     epoch=epoch,
+        #     batch=batch,
+        #     histogram=code_histogram,
+        # )
+        # compute entropy from code_histogram
+        entropy_ = entropy(code_histogram)
+        # normalize by maximum entropy possible
+        entropy_ /= np.log2(config.num_vq_embeddings)
+        print(f"Normalized entropy of codebook histogram: {entropy_}")
+        wandb.log({"codebook_entropy": entropy_})
+
+        if config.replace_unused_codes_threshold is not None:
+            model, num_codes_replaced = replace_unused_codes(
+                model, code_histogram, config.replace_unused_codes_threshold
+            )
+            print(f"Replaced {num_codes_replaced} unused codes.")
+            encoding_indices = []
+
+    return model, encoding_indices
+
+
+def train(
+    dataloader: DataLoader,
+    model: VQVAEModel,
+    optimizer: torch.optim.Optimizer,
+    scheduler,
+    epoch: int,
+    config: TrainingConfig,
+):
     """Train VQ-VAE model for one epoch.
 
     Args:
         dataloader (torch.utils.data.DataLoader): dataloader for training data
-        model (VQModel): VQ-VAE model
+        model (VQVAEModel): VQ-VAE model
         optimizer (torch.optim.Optimizer): optimizer
+        scheduler (torch.optim.lr_scheduler): learning rate scheduler
         epoch (int): current epoch
         config (TrainingConfig): training configuration
 
@@ -236,16 +369,9 @@ def train(dataloader: DataLoader, model: VQModel, optimizer, epoch, config):
 
         x = x.to(model.device)
 
-        # commitment loss
-        ze = model.encode(x)
-        zq, commloss, (_, _, min_encoding_indices) = model.quantize(ze.latents)
+        xhat, l2, commloss, codes, _ = model(x)
 
-        encoding_indices.append(min_encoding_indices.detach().cpu().numpy())
-
-        # recon loss
-        xhat = model.decode(zq).sample
-
-        l2 = l2loss(xhat, x)
+        encoding_indices.append(codes.detach().cpu().numpy())
 
         total_loss = l2 + config.alpha * commloss
 
@@ -259,47 +385,21 @@ def train(dataloader: DataLoader, model: VQModel, optimizer, epoch, config):
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
             optimizer.step()
             optimizer.zero_grad()
+            scheduler.step()
 
-        if (i + 1) % config.log_every == 0:
-            print(f"L2 loss at epoch={epoch}, batch={i} is = {running_avg_l2 / i: .4f}")
-            print(
-                f"Comm loss at epoch={epoch}, batch={i} is = {running_avg_comm / i: .4f}"
-            )
-            # log to wandb
-            wandb.log(
-                {
-                    "running_avg_L2_loss": running_avg_l2 / i,
-                    "running_avg_commitment_loss": running_avg_comm / i,
-                    "L2_loss": float(l2.detach()),
-                    "commitment_loss": float(commloss.detach()),
-                }
-            )
-
-        if (i + 1) % config.log_rich_media_every == 0:
-            plot_reconstruction_and_original(x, xhat, epoch, i, config.experiment_dir)
-
-        if (i + 1) % config.checkpoint_every == 0:
-            torch.save(
-                model.state_dict(),
-                os.path.join(config.experiment_dir, f"model_checkpoint_{epoch}_{i}.pt"),
-            )
-
-        if (i + 1) % config.check_for_unused_codes_every == 0:
-            code_histogram = compute_histograms(
-                np.concatenate(encoding_indices).flatten(), config.num_vq_embeddings
-            )
-            plot_codebook_histogram(
-                num_embeddings=config.num_vq_embeddings,
-                experiment_dir=config.experiment_dir,
-                epoch=epoch,
-                batch=i,
-                histogram=code_histogram,
-            )
-            model, num_codes_replaced = replace_unused_codes(
-                model, code_histogram, config.replace_unused_codes_threshold
-            )
-            print(f"Replaced {num_codes_replaced} unused codes.")
-            encoding_indices = []
+        model, encoding_indices = logging(
+            model,
+            x,
+            xhat,
+            encoding_indices,
+            running_avg_comm,
+            running_avg_l2,
+            l2,
+            commloss,
+            epoch,
+            i,
+            config,
+        )
 
     return model
 
@@ -360,7 +460,7 @@ def main():
     )
 
     # create model
-    model = VQModel(
+    vq = VQModel(
         in_channels=1,
         out_channels=1,
         latent_channels=1,
@@ -369,17 +469,25 @@ def main():
         layers_per_block=config.layers_per_block,
         sample_size=config.batch_size,
     )
-    num_params = model.num_parameters()
+    num_params = vq.num_parameters()
     print(f"Number of parameters in model: {num_params}")
 
-    model.quantize.legacy = False  # use new quantize function
-    model.quantize.beta = config.vq_beta
+    vq.quantize.legacy = False  # use new quantize function
+    vq.quantize.beta = config.vq_beta
 
+    model = VQVAEModel(vq)
     model.to(config.device)
     model.train()
 
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config.lr, weight_decay=config.weight_decay
+    )
+
+    scheduler = get_scheduler(
+        config.scheduler,
+        optimizer,
+        num_warmup_steps=config.num_warmup_steps,
+        num_training_steps=config.num_training_steps,
     )
 
     experiment_dir = make_experiment_dir(config.base_dir)
@@ -397,7 +505,7 @@ def main():
 
     for epoch in range(config.num_epochs):
 
-        model = train(train_loader, model, optimizer, epoch, config)
+        model = train(train_loader, model, optimizer, scheduler, epoch, config)
 
 
 if __name__ == "__main__":
