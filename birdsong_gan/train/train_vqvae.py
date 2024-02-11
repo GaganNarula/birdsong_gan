@@ -36,25 +36,42 @@ def make_experiment_dir(base_path: str) -> str:
 class VQVAEModel(nn.Module):
     """Wrap model to use new quantize function."""
 
-    def __init__(self, model, l2_normalize_latents: bool = False):
+    def __init__(self, vq, l2_normalize_latents: bool = False, scale: float = None):
         super().__init__()
-        self.model = model
+        self.vq = vq
         self.l2_normalize_latents = l2_normalize_latents
-        self.output_activation = torch.nn.Softplus()
+        self.output_activation = torch.nn.ReLU()
+        if scale is not None:
+            self.scale = scale
+        else:
+            self.scale = self.vq.quantize.n_e
+        # special initialization
+        self.reinit_code_vectors()
+
+    def reinit_code_vectors(self) -> None:
+        self.vq.quantize.embedding.weight.data.uniform_(
+            -1.0 / self.scale, 1.0 / self.scale
+        )
+
+    def reinit_code_vector(self, code: int) -> None:
+        """Reinitialize a code vector at index `code`."""
+        self.vq.quantize.embedding.weight.data[code].uniform_(
+            -1.0 / self.scale, 1.0 / self.scale
+        )
 
     def encode(
         self, x: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Encodes input into latent space and computes nearest neighbor codevectors."""
-        ze = self.model.encode(x)
+        ze = self.vq.encode(x)
         if self.l2_normalize_latents:
             ze.latents = ze.latents / ze.latents.norm(dim=-1, keepdim=True)
-        zq, commloss, (perplexity, _, codes) = self.model.quantize(ze.latents)
+        zq, commloss, (perplexity, _, codes) = self.vq.quantize(ze.latents)
         return zq, commloss, codes, perplexity
 
     def decode(self, latents: torch.Tensor) -> torch.Tensor:
         """Decodes latents into output space."""
-        xhat = self.model.decode(latents).sample
+        xhat = self.vq.decode(latents).sample
         xhat = self.output_activation(xhat)
         return xhat
 
@@ -88,6 +105,7 @@ class TrainingConfig:
 
     lr: float = 2e-5
     scheduler: str = "cosine"
+    last_checkpoint_path: str = None
     num_warmup_steps: int = 2000
     num_training_steps: int = 10200
     batch_size: int = 250
@@ -122,6 +140,12 @@ class TrainingConfig:
         1  # from https://proceedings.mlr.press/v202/huh23a/huh23a.pdf
     )
     max_grad_norm: float = 1.0
+
+    def from_dict(self, d: dict) -> None:
+        """Update config from dictionary."""
+        for k, v in d.items():
+            if k in self.__dict__:
+                setattr(self, k, v)
 
 
 class SpectrogramSnippets(torch.utils.data.Dataset):
@@ -265,9 +289,8 @@ def replace_unused_codes(
     """Replace unused codes in codebook with random embeddings."""
     unused_codes = np.where(codebook_histogram < threshold)[0]
     for code in unused_codes:
-        model.quantize.embedding.weight.data[code].uniform_(
-            -1.0 / model.num_vq_embeddings, 1.0 / model.num_vq_embeddings
-        )
+        model.reinit_code_vector(code)
+
     return model.train(), len(unused_codes)
 
 
@@ -313,6 +336,7 @@ def logging(
         )
 
     if (batch + 1) % config.check_for_unused_codes_every == 0:
+
         code_histogram = compute_histograms(
             np.concatenate(encoding_indices).flatten(), config.num_vq_embeddings
         )
@@ -367,7 +391,7 @@ def train(
 
     for i, x in enumerate(dataloader):
 
-        x = x.to(model.device)
+        x = x.to(config.device)
 
         xhat, l2, commloss, codes, _ = model(x)
 
@@ -386,6 +410,8 @@ def train(
             optimizer.step()
             optimizer.zero_grad()
             scheduler.step()
+            if (i + 1) % config.log_every == 0:
+                print(f"Latest learning rate: {scheduler.get_last_lr()}")
 
         model, encoding_indices = logging(
             model,
@@ -409,6 +435,10 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--scheduler", type=str, default=None)
+    parser.add_argument("--num_warmup_steps", type=int, default=None)
+    parser.add_argument("--num_training_steps", type=int, default=None)
+    parser.add_argument("--vq_beta", type=float, default=None)
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=None)
     parser.add_argument("--alpha", type=float, default=None)
@@ -427,6 +457,9 @@ def main():
     parser.add_argument("--dataset_path", type=str, default=None)
     parser.add_argument("--base_dir", type=str, default=None)
     parser.add_argument("--checkpoint_every", type=int, default=None)
+    parser.add_argument("--last_checkpoint_path", type=str, default=None)
+    parser.add_argument("--check_for_unused_codes_every", type=int, default=None)
+    parser.add_argument("--replace_unused_codes_threshold", type=int, default=None)
     parser.add_argument("--max_grad_norm", type=float, default=None)
 
     args = parser.parse_args()
@@ -476,6 +509,8 @@ def main():
     vq.quantize.beta = config.vq_beta
 
     model = VQVAEModel(vq)
+    if config.last_checkpoint_path is not None:
+        model.load_state_dict(torch.load(config.last_checkpoint_path))
     model.to(config.device)
     model.train()
 
