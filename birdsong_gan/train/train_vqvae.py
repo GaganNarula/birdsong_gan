@@ -48,16 +48,55 @@ class VQVAEModel(nn.Module):
         # special initialization
         self.reinit_code_vectors()
 
-    def reinit_code_vectors(self) -> None:
-        self.vq.quantize.embedding.weight.data.uniform_(
-            -1.0 / self.scale, 1.0 / self.scale
+    @classmethod
+    def from_pretrained(
+        cls, model_dir: str, checkpoint_path: str = None
+    ) -> "VQVAEModel":
+        """Load pretrained model."""
+        # first load config
+        with open(os.path.join(model_path, "experiment_config.json"), "r") as f:
+            config = json.load(f)
+        # convert config to TrainingConfig
+        training_config = TrainingConfig()
+        training_config.from_dict(config)
+        # create model
+        vq = VQModel(
+            in_channels=1,
+            out_channels=1,
+            latent_channels=1,
+            num_vq_embeddings=training_config.num_vq_embeddings,
+            vq_embed_dim=training_config.vq_embed_dim,
+            layers_per_block=training_config.layers_per_block,
+            sample_size=training_config.batch_size,
         )
+        num_params = vq.num_parameters()
+        print(f"Number of parameters in model: {num_params}")
+
+        vq.quantize.legacy = False  # use new quantize function
+        vq.quantize.beta = config.vq_beta
+
+        model = cls(vq)
+        if (
+            training_config.last_checkpoint_path is not None
+            or checkpoint_path is not None
+        ):
+            if checkpoint_path is not None:
+                model.load_state_dict(torch.load(checkpoint_path))
+            else:
+                model.load_state_dict(torch.load(config.last_checkpoint_path))
+        model.to(config.device)
+        return model
 
     def reinit_code_vector(self, code: int) -> None:
         """Reinitialize a code vector at index `code`."""
         self.vq.quantize.embedding.weight.data[code].uniform_(
             -1.0 / self.scale, 1.0 / self.scale
         )
+
+    def reinit_code_vectors(self) -> None:
+        """Reinitialize all code vectors."""
+        for i in range(self.vq.quantize.n_e):
+            self.reinit_code_vector(i)
 
     def encode(
         self, x: torch.Tensor
@@ -140,6 +179,7 @@ class TrainingConfig:
         1  # from https://proceedings.mlr.press/v202/huh23a/huh23a.pdf
     )
     max_grad_norm: float = 1.0
+    seed: int = 42
 
     def from_dict(self, d: dict) -> None:
         """Update config from dictionary."""
@@ -461,6 +501,7 @@ def main():
     parser.add_argument("--check_for_unused_codes_every", type=int, default=None)
     parser.add_argument("--replace_unused_codes_threshold", type=int, default=None)
     parser.add_argument("--max_grad_norm", type=float, default=None)
+    parser.add_argument("--seed", type=int, default=None)
 
     args = parser.parse_args()
 
@@ -470,6 +511,11 @@ def main():
     for k, v in vars(args).items():
         if v is not None:
             setattr(config, k, v)
+
+    # set seed
+    print(f"Setting seed to {config.seed}")
+    torch.manual_seed(config.seed)
+    np.random.seed(config.seed)
 
     # load dataset
     ds = load_from_disk(config.dataset_path)
