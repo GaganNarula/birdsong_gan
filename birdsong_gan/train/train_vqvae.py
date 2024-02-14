@@ -11,6 +11,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datasets import load_from_disk
 from diffusers import VQModel
+from diffusers.models.unets.unet_2d_blocks import Downsample2D, Upsample2D
 from torch.utils.data import DataLoader
 from transformers import get_scheduler
 from scipy.stats import entropy
@@ -36,9 +37,39 @@ def make_experiment_dir(base_path: str) -> str:
 class VQVAEModel(nn.Module):
     """Wrap model to use new quantize function."""
 
-    def __init__(self, vq, l2_normalize_latents: bool = False, scale: float = None):
+    def __init__(
+        self,
+        vq,
+        l2_normalize_latents: bool = False,
+        scale: float = None,
+        downsample: bool = False,
+    ):
         super().__init__()
         self.vq = vq
+        if downsample:
+            self.downsample = nn.Sequential(
+                Downsample2D(
+                    channels=1, use_conv=True, out_channels=1, kernel_size=3, padding=1
+                ),
+                nn.SiLU(),
+                Downsample2D(
+                    channels=1, use_conv=True, out_channels=1, kernel_size=3, padding=0
+                ),
+            )
+            self.upsample = nn.Sequential(
+                Upsample2D(
+                    channels=1, use_conv=True, out_channels=1, kernel_size=3, padding=1
+                ),
+                nn.SiLU(),
+                Upsample2D(
+                    channels=1, use_conv=True, out_channels=1, kernel_size=3, padding=1
+                ),
+            )
+
+        else:
+            self.downsample = None
+            self.upsample = None
+
         self.l2_normalize_latents = l2_normalize_latents
         self.output_activation = torch.nn.ReLU()
         if scale is not None:
@@ -54,7 +85,7 @@ class VQVAEModel(nn.Module):
     ) -> "VQVAEModel":
         """Load pretrained model."""
         # first load config
-        with open(os.path.join(model_path, "experiment_config.json"), "r") as f:
+        with open(os.path.join(model_dir, "experiment_config.json"), "r") as f:
             config = json.load(f)
         # convert config to TrainingConfig
         training_config = TrainingConfig()
@@ -103,6 +134,8 @@ class VQVAEModel(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Encodes input into latent space and computes nearest neighbor codevectors."""
         ze = self.vq.encode(x)
+        if self.downsample is not None:
+            ze = self.downsample(ze)
         if self.l2_normalize_latents:
             ze.latents = ze.latents / ze.latents.norm(dim=-1, keepdim=True)
         zq, commloss, (perplexity, _, codes) = self.vq.quantize(ze.latents)
@@ -110,6 +143,9 @@ class VQVAEModel(nn.Module):
 
     def decode(self, latents: torch.Tensor) -> torch.Tensor:
         """Decodes latents into output space."""
+        if self.upsample is not None:
+            latents = self.upsample(latents)
+            latents = nn.pad(latents, (0, 0, 1, 0))
         xhat = self.vq.decode(latents).sample
         xhat = self.output_activation(xhat)
         return xhat
@@ -142,11 +178,13 @@ class VQVAEModel(nn.Module):
 class TrainingConfig:
     """Configuration for training VQ-VAE."""
 
+    downsample: bool = True
     lr: float = 2e-5
     scheduler: str = "cosine"
     last_checkpoint_path: str = None
     num_warmup_steps: int = 2000
     num_training_steps: int = 10200
+    eval_every: int = 500
     batch_size: int = 250
     gradient_accumulation_steps: int = 1
     alpha: float = 10.0  # weight for commitment loss
@@ -166,8 +204,11 @@ class TrainingConfig:
     vq_embed_dim: int = 512
     num_vq_embeddings: int = 2000
     layers_per_block: int = 3
-    dataset_path: str = (
-        "/media/gagan/Gagan_external/songbird_data/age_resampled_hfdataset/"
+    train_dataset_path: str = (
+        "/media/gagan/Gagan_external/songbird_data/age_resampled_hfdataset/train"
+    )
+    test_dataset_path: str = (
+        "/media/gagan/Gagan_external/songbird_data/age_resampled_hfdataset/test"
     )
     base_dir: str = "/home/gagan/ek_experiments/vqvae"
     experiment_dir: str = ""  # will be set later
@@ -411,6 +452,7 @@ def train(
     scheduler,
     epoch: int,
     config: TrainingConfig,
+    test_dataloader: DataLoader = None,
 ):
     """Train VQ-VAE model for one epoch.
 
@@ -467,17 +509,64 @@ def train(
             config,
         )
 
+        if test_dataloader is not None and (i + 1) % config.eval_every == 0:
+            print("Evaluating on test set...")
+            model = evaluate(test_dataloader, model, config)
+
     return model
+
+
+def evaluate(test_dataloader, model, config) -> VQVAEModel:
+    """Evaluate VQ-VAE model on test
+    Args:
+
+        test_dataloader (torch.utils.data.DataLoader): dataloader for test data
+        model (VQVAEModel): VQ-VAE model
+        config (TrainingConfig): training configuration
+
+    Returns:
+        VQModel: trained VQ-VAE model
+    """
+    L2loss = 0.0
+    commitment_loss = 0.0
+    model.eval()
+    for i, x in enumerate(test_dataloader):
+
+        x = x.to(config.device)
+
+        xhat, l2, commloss, codes, _ = model(x)
+
+        L2loss += float(l2.detach())
+        commitment_loss += float(commloss.detach())
+
+        if (i + 1) % config.log_rich_media_every == 0:
+            plot_reconstruction_and_original(x, xhat, 0, i, config.experiment_dir)
+
+    L2loss /= len(test_dataloader)
+    commitment_loss /= len(test_dataloader)
+    # log to wandb
+    wandb.log(
+        {
+            "L2_loss_test": L2loss,
+            "commitment_loss_test": commitment_loss,
+        }
+    )
+    print(f"L2 loss on test set: {L2loss}")
+    print(f"Commitment loss on test set: {commitment_loss}")
+
+    return model.train()
 
 
 def main():
     """Main function for training VQ-VAE."""
 
     parser = argparse.ArgumentParser()
+    parser.add_argument("--downsample", action="store_true")
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--scheduler", type=str, default=None)
     parser.add_argument("--num_warmup_steps", type=int, default=None)
     parser.add_argument("--num_training_steps", type=int, default=None)
+    parser.add_argument("--eval_every", type=int, default=None)
     parser.add_argument("--vq_beta", type=float, default=None)
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=None)
@@ -518,17 +607,19 @@ def main():
     np.random.seed(config.seed)
 
     # load dataset
-    ds = load_from_disk(config.dataset_path)
+    train_ds = load_from_disk(config.train_dataset_path)
 
     train_ds = SpectrogramSnippets(
-        ds,
+        train_ds,
         ntimeframes=config.ntimeframes,
         spec_dtype=config.spec_dtype,
         log_scale=config.log_scale,
     )
     print(
-        f"Loaded dataset from {config.dataset_path}, number of samples: {len(train_ds)}"
+        f"Loaded training dataset from {config.train_dataset_path}, number of samples: {len(train_ds)}"
     )
+
+    test_ds = load_from_disk(config.test_dataset_path)
 
     # create dataloader
     train_loader = DataLoader(
@@ -536,6 +627,15 @@ def main():
         batch_size=config.batch_size,
         shuffle=True,
         num_workers=config.num_workers,
+    )
+    test_loader = DataLoader(
+        test_ds,
+        batch_size=config.batch_size * 2,
+        shuffle=True,
+        num_workers=config.num_workers,
+    )
+    print(
+        f"Loaded test dataset from {config.test_dataset_path}, number of samples: {len(test_ds)}"
     )
 
     # create model
@@ -586,7 +686,12 @@ def main():
 
     for epoch in range(config.num_epochs):
 
-        model = train(train_loader, model, optimizer, scheduler, epoch, config)
+        model = train(
+            train_loader, model, optimizer, scheduler, epoch, config, test_loader
+        )
+        print("#" * 80)
+        print(f"Epoch {epoch} completed.")
+        print("#" * 80)
 
 
 if __name__ == "__main__":
