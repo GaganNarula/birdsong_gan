@@ -114,7 +114,7 @@ with gr.Blocks(theme="soft") as demo:
 
                 return fig
 
-            spect = gr.Plot(plot_random_spectrogram, label="Spectrogram")
+            spect = gr.Plot(label="Spectrogram")
         # audio = gr.Audio(play_audio_sounddevice, type="file", label="Audio")
 
         action_btn.click(
