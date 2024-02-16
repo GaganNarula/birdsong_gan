@@ -184,6 +184,7 @@ class TrainingConfig:
     last_checkpoint_path: str = None
     num_warmup_steps: int = 2000
     num_training_steps: int = 10200
+    scale: float = None  # scale for codebook initialization
     eval_every: int = 500
     batch_size: int = 250
     gradient_accumulation_steps: int = 1
@@ -192,10 +193,10 @@ class TrainingConfig:
         0.25  # balances between pushing codebook to latents vs pushing latents to codebook
     )
     weight_decay: float = 0.0
-    l2_normalize_latents: bool = True
+    l2_normalize_latents: bool = False
     log_every: int = 20
     log_rich_media_every: int = 20
-    num_epochs: int = 5
+    num_epochs: int = 3
     num_workers: int = 4
     device: str = "cuda"
     spec_dtype: str = "float32"
@@ -421,13 +422,7 @@ def logging(
         code_histogram = compute_histograms(
             np.concatenate(encoding_indices).flatten(), config.num_vq_embeddings
         )
-        # plot_codebook_histogram(
-        #     num_embeddings=config.num_vq_embeddings,
-        #     experiment_dir=config.experiment_dir,
-        #     epoch=epoch,
-        #     batch=batch,
-        #     histogram=code_histogram,
-        # )
+
         # compute entropy from code_histogram
         entropy_ = entropy(code_histogram)
         # normalize by maximum entropy possible
@@ -516,6 +511,7 @@ def train(
     return model
 
 
+@torch.no_grad()
 def evaluate(test_dataloader, model, config) -> VQVAEModel:
     """Evaluate VQ-VAE model on test
     Args:
@@ -530,11 +526,12 @@ def evaluate(test_dataloader, model, config) -> VQVAEModel:
     L2loss = 0.0
     commitment_loss = 0.0
     model.eval()
+
     for i, x in enumerate(test_dataloader):
 
         x = x.to(config.device)
 
-        xhat, l2, commloss, codes, _ = model(x)
+        xhat, l2, commloss, _, _ = model(x)
 
         L2loss += float(l2.detach())
         commitment_loss += float(commloss.detach())
@@ -620,6 +617,12 @@ def main():
     )
 
     test_ds = load_from_disk(config.test_dataset_path)
+    test_ds = SpectrogramSnippets(
+        test_ds,
+        ntimeframes=config.ntimeframes,
+        spec_dtype=config.spec_dtype,
+        log_scale=config.log_scale,
+    )
 
     # create dataloader
     train_loader = DataLoader(
