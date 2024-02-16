@@ -1,12 +1,10 @@
-import sys
+"""General utility functions for the birdsong_gan package."""
+
 import os
 from os.path import join
 import numpy as np
 from PIL import Image
 import librosa as lc
-import pickle
-import itertools
-import fnmatch
 import shutil
 import soundfile as sf
 import torch
@@ -46,7 +44,7 @@ def transform(im):
     inverse transoform should be an inverse of this function
     """
     im = from_polar(im)
-    im, phase = lc.magphase(im)
+    im, _ = lc.magphase(im)
     im = np.log1p(im)
     return im
 
