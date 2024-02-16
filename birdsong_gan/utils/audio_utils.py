@@ -1,6 +1,8 @@
 import numpy as np
+import torch
 import matplotlib.pyplot as plt
 import librosa as lc
+from torchaudio.transforms import GriffinLim
 
 
 def make_spectrogram(
@@ -150,3 +152,28 @@ def random_time_crop_spectrogram(
         )
     start = np.random.randint(0, n - crop_length)
     return spectrogram[:, start : start + crop_length]
+
+
+def make_audio_from_spectrogram(
+    spectrogram: np.ndarray | torch.Tensor, n_fft: int = 256, hop_length: int = 128
+) -> np.ndarray:
+    """Create audio from a spectrogram using Griffin-Lim algorithm.
+
+    :param spectrogram: input audio sequence
+    :type spectrogram: np.ndarray | torch.Tensor
+    :param n_fft: nfft (window size), defaults to 256
+    :type n_fft: int
+    :param hop_length: hop_length (frame shift), defaults to 128
+    :type hop_length: int
+    :return: audio sequence
+    :rtype: np.ndarray
+    """
+    if isinstance(spectrogram, np.ndarray):
+        spectrogram = torch.from_numpy(spectrogram)
+
+    # make sure shape of audio is [nfft//2, timeframes]
+    assert spectrogram.shape[0] == n_fft // 2 + 1, "Invalid shape of spectrogram"
+    assert spectrogram.dim() == 2, "Invalid shape of spectrogram"
+
+    griffin_lim = GriffinLim(n_fft=n_fft, hop_length=hop_length)
+    return griffin_lim(spectrogram)
