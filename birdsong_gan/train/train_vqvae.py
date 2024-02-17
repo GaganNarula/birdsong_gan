@@ -20,6 +20,7 @@ from birdsong_gan.utils.audio_utils import (
     random_time_crop_spectrogram,
     rescale_spectrogram,
 )
+from birdsong_gan.models.vqvae import VQVAEModel
 
 
 l2loss = torch.nn.MSELoss()
@@ -34,151 +35,12 @@ def make_experiment_dir(base_path: str) -> str:
     return experiment_dir
 
 
-class VQVAEModel(nn.Module):
-    """Wrap model to use new quantize function."""
-
-    def __init__(
-        self,
-        vq,
-        l2_normalize_latents: bool = False,
-        scale: float = None,
-        downsample: bool = False,
-    ):
-        super().__init__()
-        self.vq = vq
-        if downsample:
-            self.downsample = nn.Sequential(
-                Downsample2D(
-                    channels=1, use_conv=True, out_channels=1, kernel_size=3, padding=1
-                ),
-                nn.SiLU(),
-                Downsample2D(
-                    channels=1, use_conv=True, out_channels=1, kernel_size=3, padding=0
-                ),
-            )
-            self.upsample = nn.Sequential(
-                Upsample2D(
-                    channels=1, use_conv=True, out_channels=1, kernel_size=3, padding=1
-                ),
-                nn.SiLU(),
-                Upsample2D(
-                    channels=1, use_conv=True, out_channels=1, kernel_size=3, padding=1
-                ),
-            )
-
-        else:
-            self.downsample = None
-            self.upsample = None
-
-        self.l2_normalize_latents = l2_normalize_latents
-        self.output_activation = torch.nn.ReLU()
-        if scale is not None:
-            self.scale = scale
-        else:
-            self.scale = self.vq.quantize.n_e
-        # special initialization
-        self.reinit_code_vectors()
-
-    @classmethod
-    def from_pretrained(
-        cls, model_dir: str, checkpoint_path: str = None
-    ) -> "VQVAEModel":
-        """Load pretrained model."""
-        # first load config
-        with open(os.path.join(model_dir, "experiment_config.json"), "r") as f:
-            config = json.load(f)
-        # convert config to TrainingConfig
-        training_config = TrainingConfig()
-        training_config.from_dict(config)
-        # create model
-        vq = VQModel(
-            in_channels=1,
-            out_channels=1,
-            latent_channels=1,
-            num_vq_embeddings=training_config.num_vq_embeddings,
-            vq_embed_dim=training_config.vq_embed_dim,
-            layers_per_block=training_config.layers_per_block,
-            sample_size=training_config.batch_size,
-        )
-        num_params = vq.num_parameters()
-        print(f"Number of parameters in model: {num_params}")
-
-        vq.quantize.legacy = False  # use new quantize function
-        vq.quantize.beta = config.vq_beta
-
-        model = cls(vq)
-        if (
-            training_config.last_checkpoint_path is not None
-            or checkpoint_path is not None
-        ):
-            if checkpoint_path is not None:
-                model.load_state_dict(torch.load(checkpoint_path))
-            else:
-                model.load_state_dict(torch.load(config.last_checkpoint_path))
-        model.to(config.device)
-        return model
-
-    def reinit_code_vector(self, code: int) -> None:
-        """Reinitialize a code vector at index `code`."""
-        self.vq.quantize.embedding.weight.data[code].uniform_(
-            -1.0 / self.scale, 1.0 / self.scale
-        )
-
-    def reinit_code_vectors(self) -> None:
-        """Reinitialize all code vectors."""
-        for i in range(self.vq.quantize.n_e):
-            self.reinit_code_vector(i)
-
-    def encode(
-        self, x: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Encodes input into latent space and computes nearest neighbor codevectors."""
-        ze = self.vq.encode(x)
-        if self.downsample is not None:
-            ze = self.downsample(ze)
-        if self.l2_normalize_latents:
-            ze.latents = ze.latents / ze.latents.norm(dim=-1, keepdim=True)
-        zq, commloss, (perplexity, _, codes) = self.vq.quantize(ze.latents)
-        return zq, commloss, codes, perplexity
-
-    def decode(self, latents: torch.Tensor) -> torch.Tensor:
-        """Decodes latents into output space."""
-        if self.upsample is not None:
-            latents = self.upsample(latents)
-            latents = nn.pad(latents, (0, 0, 1, 0))
-        xhat = self.vq.decode(latents).sample
-        xhat = self.output_activation(xhat)
-        return xhat
-
-    @torch.no_grad()
-    def infer_latent_code(self, x: torch.Tensor) -> torch.Tensor:
-        """Infer latent code for input."""
-        _, _, codes, _ = self.encode(x)
-        return codes
-
-    @torch.no_grad()
-    def reconstruct(self, x: torch.Tensor) -> torch.Tensor:
-        """Reconstruct input."""
-        zq, _, _, _ = self.encode(x)
-        return self.decode(zq)
-
-    def forward(
-        self, x: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Forward pass. Encodes input, computes reconstruction and loss."""
-        # encode
-        zq, commloss, codes, perplexity = self.encode(x)
-        # decode
-        xhat = self.decode(zq)
-        l2 = l2loss(xhat, x)
-        return xhat, l2, commloss, codes, perplexity
-
-
 @dataclass
 class TrainingConfig:
     """Configuration for training VQ-VAE."""
 
     downsample: bool = True
+    num_downsample_layers: int = 2
     lr: float = 2e-5
     scheduler: str = "cosine"
     last_checkpoint_path: str = None
@@ -201,6 +63,7 @@ class TrainingConfig:
     device: str = "cuda"
     spec_dtype: str = "float32"
     ntimeframes: int = 16
+    nfft_half: int = 129
     log_scale: bool = True
     vq_embed_dim: int = 512
     num_vq_embeddings: int = 2000
@@ -523,7 +386,7 @@ def evaluate(test_dataloader, model, config) -> VQVAEModel:
     Returns:
         VQModel: trained VQ-VAE model
     """
-    L2loss = 0.0
+    l2_loss = 0.0
     commitment_loss = 0.0
     model.eval()
 
@@ -533,22 +396,22 @@ def evaluate(test_dataloader, model, config) -> VQVAEModel:
 
         xhat, l2, commloss, _, _ = model(x)
 
-        L2loss += float(l2.detach())
+        l2_loss += float(l2.detach())
         commitment_loss += float(commloss.detach())
 
         if (i + 1) % config.log_rich_media_every == 0:
-            plot_reconstruction_and_original(x, xhat, 0, i, config.experiment_dir)
+            plot_reconstruction_and_original(x, xhat, "test", i, config.experiment_dir)
 
-    L2loss /= len(test_dataloader)
+    l2_loss /= len(test_dataloader)
     commitment_loss /= len(test_dataloader)
     # log to wandb
     wandb.log(
         {
-            "L2_loss_test": L2loss,
+            "L2_loss_test": l2_loss,
             "commitment_loss_test": commitment_loss,
         }
     )
-    print(f"L2 loss on test set: {L2loss}")
+    print(f"L2 loss on test set: {l2_loss}")
     print(f"Commitment loss on test set: {commitment_loss}")
 
     return model.train()
@@ -559,10 +422,13 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--downsample", action="store_true")
+    parser.add_argument("--num_downsample_layers", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--scheduler", type=str, default=None)
     parser.add_argument("--num_warmup_steps", type=int, default=None)
     parser.add_argument("--num_training_steps", type=int, default=None)
+    parser.add_argument("--scale", type=float, default=None)
+    parser.add_argument("--l2_normalize_latents", action="store_true")
     parser.add_argument("--eval_every", type=int, default=None)
     parser.add_argument("--vq_beta", type=float, default=None)
     parser.add_argument("--batch_size", type=int, default=None)
@@ -613,7 +479,8 @@ def main():
         log_scale=config.log_scale,
     )
     print(
-        f"Loaded training dataset from {config.train_dataset_path}, number of samples: {len(train_ds)}"
+        f"""Loaded training dataset from {config.train_dataset_path}, 
+        number of samples: {len(train_ds)}"""
     )
 
     test_ds = load_from_disk(config.test_dataset_path)
@@ -642,24 +509,18 @@ def main():
     )
 
     # create model
-    vq = VQModel(
-        in_channels=1,
-        out_channels=1,
-        latent_channels=1,
+    model = VQVAEModel(
+        l2_normalize_latents=config.l2_normalize_latents,
+        scale=config.scale,
+        downsample=config.downsample,
+        num_downsample_layers=config.num_downsample_layers,
+        layers_per_block=config.layers_per_block,
         num_vq_embeddings=config.num_vq_embeddings,
         vq_embed_dim=config.vq_embed_dim,
-        layers_per_block=config.layers_per_block,
-        sample_size=config.batch_size,
+        vq_beta=config.vq_beta,
+        nfft_half=config.nfft_half,
+        ntimeframes=config.ntimeframes,
     )
-    num_params = vq.num_parameters()
-    print(f"Number of parameters in model: {num_params}")
-
-    vq.quantize.legacy = False  # use new quantize function
-    vq.quantize.beta = config.vq_beta
-
-    model = VQVAEModel(vq)
-    if config.last_checkpoint_path is not None:
-        model.load_state_dict(torch.load(config.last_checkpoint_path))
     model.to(config.device)
     model.train()
 
