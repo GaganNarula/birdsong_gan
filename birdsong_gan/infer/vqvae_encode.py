@@ -1,5 +1,4 @@
 import os
-import json
 import tqdm
 import numpy as np
 import torch
@@ -29,20 +28,39 @@ def main(args):
 
     print("Encoding data...")
     # preprocess and encode data
-    encoded_data = {"codes": [], "bird_name": [], "days_post_hatch": []}
+    encoded_data = {
+        "codes": [],
+        "bird_name": [],
+        "days_post_hatch": [],
+        "recording_date": [],
+    }
+
     for idx, example in enumerate(tqdm.tqdm(dataset)):
         x = preprocess_example(example)
 
         codes = model.infer_latent_codes_for_spectrogram(x)
 
         codes = codes.cpu().detach().numpy()
-        encoded_data[idx] = codes
+        encoded_data["codes"].append(codes)
+        encoded_data["bird_name"].append(example["bird_name"])
+        encoded_data["days_post_hatch"].append(example["days_post_hatch"])
+        encoded_data["recording_date"].append(example["recording_date"])
 
-    # create Dataset object
-    encoded_data = Dataset.from_dict(encoded_data)
+        if (idx + 1) % args.write_batch_size == 0:
+            # remove any folder starting with 'encoded_data'
+            os.system(f"rm -rf {args.output_path}/encoded_data*")
 
-    # save encoded data
-    encoded_data.save_to_disk(args.output_path)
+            # save intermediate results
+            datatosave = Dataset.from_dict(encoded_data)
+            datatosave.save_to_disk(
+                os.path.join(args.output_path, f"encoded_data_{idx + 1}")
+            )
+
+    # save last batch
+    datatosave = Dataset.from_dict(encoded_data)
+    datatosave.save_to_disk(
+        os.path.join(args.output_path, f"encoded_data_{len(dataset)}")
+    )
 
 
 if __name__ == "__main__":
@@ -73,6 +91,13 @@ if __name__ == "__main__":
         type=str,
         required=True,
         help="Path to the output directory.",
+    )
+    parser.add_argument(
+        "--write_batch_size",
+        type=int,
+        required=False,
+        default=10000,
+        help="Number of examples to write to disk at once.",
     )
 
     args = parser.parse_args()
