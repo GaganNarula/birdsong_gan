@@ -1,3 +1,5 @@
+"""VQ-VAE model with optional 4x downsampling and 4x upsampling."""
+
 import os
 import json
 import torch
@@ -9,53 +11,115 @@ l2loss = nn.MSELoss()
 
 
 class VQVAEModel(nn.Module):
-    """Wrap model to use new quantize function."""
+    """Wrap model to use new quantize function.
+
+    Args:
+        l2_normalize_latents: Whether to L2 normalize latents.
+        scale: Scale for code vectors.
+        downsample: Whether to downsample latents.
+        layers_per_block: Number of layers per block.
+        num_vq_embeddings: Number of VQ embeddings.
+        vq_embed_dim: VQ embedding dimension.
+        vq_beta: VQ beta.
+
+    """
 
     def __init__(
         self,
-        vq: VQModel = None,
         l2_normalize_latents: bool = False,
         scale: float = None,
         downsample: bool = False,
+        layers_per_block: int = 3,
+        num_downsample_layers: int = 2,
+        num_vq_embeddings: int = 128,
+        vq_embed_dim: int = 1,
+        vq_beta: float = 0.1,
+        nfft_half: int = 129,
+        ntimeframes: int = 16,
     ):
         super().__init__()
 
-        if vq is None:
-            print("Creating new VQVAE model with default parameters.")
-            vq = VQModel()
+        vq = VQModel(
+            in_channels=1,
+            out_channels=1,
+            latent_channels=1,
+            num_vq_embeddings=num_vq_embeddings,
+            vq_embed_dim=vq_embed_dim,
+            layers_per_block=layers_per_block,
+        )
+
+        vq.quantize.legacy = False  # use new quantize function
+        vq.quantize.beta = vq_beta
 
         self.vq = vq
+        self.latent_height = nfft_half
+        self.latent_width = ntimeframes
 
         if downsample:
-            self.downsample = nn.Sequential(
-                Downsample2D(
-                    channels=1, use_conv=True, out_channels=1, kernel_size=3, padding=1
-                ),
-                nn.SiLU(),
-                Downsample2D(
-                    channels=1, use_conv=True, out_channels=1, kernel_size=3, padding=0
-                ),
-            )
-            self.upsample = nn.Sequential(
-                Upsample2D(
-                    channels=1, use_conv=True, out_channels=1, kernel_size=3, padding=1
-                ),
-                nn.SiLU(),
-                Upsample2D(
-                    channels=1, use_conv=True, out_channels=1, kernel_size=3, padding=1
-                ),
-            )
+            # downsample for nlayers
+            downsample = []
+            for _ in range(num_downsample_layers):
+                downsample.append(
+                    Downsample2D(
+                        channels=1,
+                        use_conv=True,
+                        out_channels=1,
+                        kernel_size=3,
+                        padding=0,
+                    )
+                )
+                downsample.append(nn.SiLU())
+                self.latent_height = self.latent_height // 2
+                self.latent_width = self.latent_width // 2
+
+            self.downsample = nn.Sequential(*downsample)
+
+            # upsample for same num of layers
+            upsample = []
+            for _ in range(num_downsample_layers):
+                upsample.append(
+                    Upsample2D(
+                        channels=1,
+                        use_conv=True,
+                        out_channels=1,
+                        kernel_size=3,
+                        padding=1,
+                    )
+                )
+                upsample.append(nn.SiLU())
+
+            self.upsample = nn.Sequential(*upsample)
+
+            print("Downsampled latent shape:", self.latent_height, self.latent_width)
 
         else:
             self.downsample = None
             self.upsample = None
 
         self.l2_normalize_latents = l2_normalize_latents
+        self.nfft_half = nfft_half
+        self.ntimeframes = ntimeframes
         self.output_activation = torch.nn.ReLU()
+
         if scale is not None:
             self.scale = scale
         else:
             self.scale = self.vq.quantize.n_e
+
+        self.config = {
+            "l2_normalize_latents": l2_normalize_latents,
+            "scale": scale,
+            "downsample": downsample,
+            "layers_per_block": layers_per_block,
+            "num_vq_embeddings": num_vq_embeddings,
+            "vq_embed_dim": vq_embed_dim,
+            "vq_beta": vq_beta,
+            "device": "cuda" if torch.cuda.is_available() else "cpu",
+            "last_checkpoint_path": None,
+            "nfft_half": nfft_half,
+            "ntimeframes": ntimeframes,
+        }
+
         # special initialization
         self.reinit_code_vectors()
 
@@ -65,29 +129,23 @@ class VQVAEModel(nn.Module):
     ) -> "VQVAEModel":
         """Load pretrained model."""
         # first load config
-        with open(os.path.join(model_dir, "experiment_config.json"), "r") as f:
+        with open(
+            os.path.join(model_dir, "experiment_config.json"), "r", encoding="utf-8"
+        ) as f:
             config = json.load(f)
-        # create model
-        vq = VQModel(
-            in_channels=1,
-            out_channels=1,
-            latent_channels=1,
-            num_vq_embeddings=config["num_vq_embeddings"],
-            vq_embed_dim=config["vq_embed_dim"],
-            layers_per_block=config["layers_per_block"],
-            sample_size=config["batch_size"],
-        )
-        num_params = vq.num_parameters()
-        print(f"Number of parameters in model: {num_params}")
 
-        vq.quantize.legacy = False  # use new quantize function
-        vq.quantize.beta = config["vq_beta"]
-
+        # then load model
         model = cls(
-            vq,
             l2_normalize_latents=config["l2_normalize_latents"],
             scale=config["scale"],
             downsample=config["downsample"],
+            num_downsample_layers=config["num_downsample_layers"],
+            layers_per_block=config["layers_per_block"],
+            num_vq_embeddings=config["num_vq_embeddings"],
+            vq_embed_dim=config["vq_embed_dim"],
+            vq_beta=config["vq_beta"],
+            nfft_half=config["nfft_half"],
+            ntimeframes=config["ntimeframes"],
         )
 
         if checkpoint_path is None and config["last_checkpoint_path"] is not None:
@@ -118,21 +176,26 @@ class VQVAEModel(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Encodes input into latent space and computes nearest neighbor codevectors."""
         ze = self.vq.encode(x)
+
         if self.downsample is not None:
             ze.latents = self.downsample(ze.latents)
+
         if self.l2_normalize_latents:
             ze.latents = ze.latents / ze.latents.norm(dim=-1, keepdim=True)
+
         zq, commloss, (perplexity, _, codes) = self.vq.quantize(ze.latents)
+
         return zq, commloss, codes, perplexity
 
     def decode(self, latents: torch.Tensor) -> torch.Tensor:
         """Decodes latents into output space."""
         if self.upsample is not None:
             latents = self.upsample(latents)
-            latents = nn.pad(latents, (0, 0, 1, 0))
+            latents = nn.functional.pad(latents, (0, 0, 1, 0))
+
         xhat = self.vq.decode(latents).sample
-        xhat = self.output_activation(xhat)
-        return xhat
+
+        return self.output_activation(xhat)
 
     @torch.no_grad()
     def infer_latent_code(self, x: torch.Tensor) -> torch.Tensor:
@@ -142,22 +205,21 @@ class VQVAEModel(nn.Module):
         _, _, codes, _ = self.encode(x)
         return codes
 
-    def chunk_spectrogram(
-        self, x: torch.Tensor, chunk_frame_length: int = 16
-    ) -> torch.Tensor:
+    def chunk_spectrogram(self, x: torch.Tensor, ntimeframes: int = 16) -> torch.Tensor:
         """Chunk spectrogram into smaller snippets. Input is shape (nfft//2, timeframes).
         Output is shape (n, 1, nfft//2, chunk_frame_length). where n is the number of chunks.
         """
         xt = []
         i = 0
-        for t in range(x.shape[-1] // chunk_frame_length):
-            xt.append(x[:, i : i + chunk_frame_length].unsqueeze(0))
-            i += chunk_frame_length
+        for _ in range(x.shape[-1] // ntimeframes):
+            xt.append(x[:, i : i + ntimeframes].unsqueeze(0))
+            i += ntimeframes
         return torch.stack(xt)
 
     def unchunk_spectrogram(self, x: torch.Tensor) -> torch.Tensor:
-        """Unchunk spectrogram into a single tensor. Input is shape (n, 1, nfft//2, chunk_frame_length).
-        Output is shape (1, nfft//2, timeframes).
+        """Unchunk spectrogram into a single tensor.
+        Input is shape (n, 1, nfft//2, ntimeframes).
+        Output is shape (1, nfft//2, ntimeframes * n).
         """
         x = x.squeeze()
         return torch.cat([y for y in x], dim=-1)
@@ -169,11 +231,11 @@ class VQVAEModel(nn.Module):
         """Infer latent codes for input spectrogram.
 
         Input is shape (nfft//2, timeframes).
-        Output is shape is (n, 1, nfft//2, chunk_frame_length).
+        Output is shape is (n, 1, nfft//2, self.ntimeframes).
         """
         self.vq.quantize.sane_index_shape = True
 
-        x = self.chunk_spectrogram(spectrogram)
+        x = self.chunk_spectrogram(spectrogram, self.ntimeframes)
         codes = self.infer_latent_code(x)
 
         self.vq.quantize.sane_index_shape = False
@@ -184,8 +246,8 @@ class VQVAEModel(nn.Module):
     def decode_spectrogram_from_codes(self, codes: torch.Tensor) -> torch.Tensor:
         """Decode spectrogram from latent codes."""
         latents = self.vq.quantize.embedding(codes)
-        xhat = self.decode(latents)  # shape (n, 1, nfft//2, chunk_frame_length)
-        return self.unchunk_spectrogram(xhat)  # shape (1, nfft//2, timeframes)
+        xhat = self.decode(latents)  # shape (bsz, 1, nfft//2, ntimeframes)
+        return self.unchunk_spectrogram(xhat)  # shape (1, nfft//2,  ntimeframes * bsz)
 
     @torch.no_grad()
     def reconstruct(self, x: torch.Tensor) -> torch.Tensor:
