@@ -6,12 +6,9 @@ import argparse
 from datetime import datetime
 from dataclasses import dataclass
 import torch
-import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
 from datasets import load_from_disk
-from diffusers import VQModel
-from diffusers.models.unets.unet_2d_blocks import Downsample2D, Upsample2D
 from torch.utils.data import DataLoader
 from transformers import get_scheduler
 from scipy.stats import entropy
@@ -58,6 +55,7 @@ class TrainingConfig:
     l2_normalize_latents: bool = False
     log_every: int = 20
     log_rich_media_every: int = 20
+    log_rich_media_every_on_eval: int = 10
     num_epochs: int = 3
     num_workers: int = 4
     device: str = "cuda"
@@ -399,7 +397,7 @@ def evaluate(test_dataloader, model, config) -> VQVAEModel:
         l2_loss += float(l2.detach())
         commitment_loss += float(commloss.detach())
 
-        if (i + 1) % config.log_rich_media_every == 0:
+        if (i + 1) % config.log_rich_media_every_on_eval == 0:
             plot_reconstruction_and_original(x, xhat, "test", i, config.experiment_dir)
 
     l2_loss /= len(test_dataloader)
