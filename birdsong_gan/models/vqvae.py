@@ -58,7 +58,7 @@ class VQVAEModel(nn.Module):
         if downsample:
             # downsample for nlayers
             downsample = []
-            for _ in range(num_downsample_layers):
+            for layer in range(num_downsample_layers):
                 downsample.append(
                     Downsample2D(
                         channels=1,
@@ -68,7 +68,10 @@ class VQVAEModel(nn.Module):
                         padding=0,
                     )
                 )
-                downsample.append(nn.SiLU())
+                # do not add silu if last layer
+                if layer != num_downsample_layers - 1:
+                    downsample.append(nn.SiLU())
+
                 self.latent_height = self.latent_height // 2
                 self.latent_width = self.latent_width // 2
 
@@ -76,7 +79,7 @@ class VQVAEModel(nn.Module):
 
             # upsample for same num of layers
             upsample = []
-            for _ in range(num_downsample_layers):
+            for layer in range(num_downsample_layers):
                 upsample.append(
                     Upsample2D(
                         channels=1,
@@ -86,7 +89,9 @@ class VQVAEModel(nn.Module):
                         padding=1,
                     )
                 )
-                upsample.append(nn.SiLU())
+                # do not add silu if last layer
+                if layer != num_downsample_layers - 1:
+                    upsample.append(nn.SiLU())
 
             self.upsample = nn.Sequential(*upsample)
 
@@ -149,9 +154,13 @@ class VQVAEModel(nn.Module):
         )
 
         if checkpoint_path is None and config["last_checkpoint_path"] is not None:
-            model.load_state_dict(torch.load(config.last_checkpoint_path), strict=False)
+            model.load_state_dict(
+                torch.load(config.last_checkpoint_path), strict=True, assign=False
+            )
         elif checkpoint_path is not None:
-            model.load_state_dict(torch.load(checkpoint_path), strict=False)
+            model.load_state_dict(
+                torch.load(checkpoint_path), strict=True, assign=False
+            )
         else:
             print(
                 "No checkpoint path provided. Model will be initialized with random weights."
