@@ -18,9 +18,18 @@ from birdsong_gan.utils.audio_utils import (
     rescale_spectrogram,
 )
 from birdsong_gan.models.vqvae import VQVAEModel
+from birdsong_gan.models.nets_16col_residual import _netD
 
 
 l2loss = torch.nn.MSELoss()
+gan_criterion = torch.nn.BCELoss()
+
+
+def GANLoss(discriminator: _netD, real: torch.Tensor, fake: torch.Tensor):
+    """Compute GAN loss for discriminator and generator."""
+    real_loss = gan_criterion(discriminator(real), torch.ones_like(real))
+    fake_loss = gan_criterion(discriminator(fake), torch.zeros_like(fake))
+    return real_loss + fake_loss
 
 
 def make_experiment_dir(base_path: str) -> str:
@@ -251,21 +260,19 @@ def logging(
     config,
 ) -> None:
     """Logs losses to wandb and prints / saves figures to disk, checkpoints model."""
+    l2 = float(l2.detach())
+    commloss = float(commloss.detach())
 
     if (batch + 1) % config.log_every == 0:
-        print(
-            f"L2 loss at epoch={epoch}, batch={batch} is = {running_avg_l2 / batch: .4f}"
-        )
-        print(
-            f"Comm loss at epoch={epoch}, batch={batch} is = {running_avg_comm / batch: .4f}"
-        )
+        print(f"L2 loss at epoch={epoch}, batch={batch} is = {l2: .5f}")
+        print(f"Comm loss at epoch={epoch}, batch={batch} is = {commloss: .5f}")
         # log to wandb
         wandb.log(
             {
                 "running_avg_L2_loss": running_avg_l2 / batch,
                 "running_avg_commitment_loss": running_avg_comm / batch,
-                "L2_loss": float(l2.detach()),
-                "commitment_loss": float(commloss.detach()),
+                "L2_loss": l2,
+                "commitment_loss": commloss,
             }
         )
 
@@ -398,7 +405,13 @@ def evaluate(test_dataloader, model, config) -> VQVAEModel:
         commitment_loss += float(commloss.detach())
 
         if (i + 1) % config.log_rich_media_every_on_eval == 0:
-            plot_reconstruction_and_original(x, xhat, "test", i, config.experiment_dir)
+            plot_reconstruction_and_original(
+                x[: config.batch_size // 4],
+                xhat[: config.batch_size // 4],
+                "test",
+                i,
+                config.experiment_dir,
+            )
 
     l2_loss /= len(test_dataloader)
     commitment_loss /= len(test_dataloader)
@@ -554,6 +567,9 @@ def main():
         print("#" * 80)
         print(f"Epoch {epoch} completed.")
         print("#" * 80)
+
+    # save final model
+    torch.save(model.state_dict(), os.path.join(experiment_dir, "final_model.pt"))
 
 
 if __name__ == "__main__":
