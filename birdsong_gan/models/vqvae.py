@@ -264,6 +264,22 @@ class VQVAEModel(nn.Module):
         zq, _, _, _ = self.encode(x)
         return self.decode(zq)
 
+    def sample_uniform_random_codes(
+        self, size: tuple[int, int, int, int]
+    ) -> torch.Tensor:
+        """Sample codes."""
+        return torch.randint(0, self.vq.quantize.n_e, size=size).to(
+            self.config["device"]
+        )
+
+    def sample(self, size: tuple[int, int, int, int]) -> torch.Tensor:
+        """Sample from model. First, sample codes from a uniform categorical distribution,
+        then fetch the latents, finally, decode the latents into the output space.
+        """
+        codes = self.sample_uniform_random_codes(size)
+        latents = self.vq.quantize.embedding(codes)
+        return self.decode(latents)  # shape (bsz, 1, nfft//2, ntimeframes)
+
     def forward(
         self, x: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
