@@ -57,6 +57,7 @@ class TrainingConfig:
     batch_size: int = 250
     gradient_accumulation_steps: int = 1
     alpha: float = 10.0  # weight for commitment loss
+    gan_weight: float = 0.5  # weight for gan loss
     vq_beta: float = (
         0.25  # balances between pushing codebook to latents vs pushing latents to codebook
     )
@@ -409,7 +410,7 @@ def train_with_ganloss(
     running_avg_gan_discriminator_loss = 0.0
     running_avg_gan_generator_loss = 0.0
     train_discriminator = True
-    optimizer, optimizer_netD, optimizer_decoder = optimizers
+    optimizer, optimizer_netd, optimizer_decoder = optimizers
 
     for i, x in enumerate(dataloader):
 
@@ -420,9 +421,6 @@ def train_with_ganloss(
         encoding_indices.append(codes.detach().cpu().numpy())
 
         total_loss = l2 + config.alpha * commloss
-
-        total_loss /= config.gradient_accumulation_steps
-        total_loss.backward()
 
         # generate fake data
         fake = model.sample(codes.size())
@@ -436,12 +434,14 @@ def train_with_ganloss(
             running_avg_gan_discriminator_loss += float(gan_loss_d.detach())
 
         else:
-            # compute gan loss for generator
+            # compute gan loss for generator, add to total loss
             gan_loss_g = gan_loss(netD, fake, x)
-            gan_loss_g /= config.gradient_accumulation_steps
-            gan_loss_g.backward()
+            total_loss += config.gan_weight * gan_loss_g
             train_discriminator = True
             running_avg_gan_generator_loss += float(gan_loss_g.detach())
+
+        total_loss /= config.gradient_accumulation_steps
+        total_loss.backward()
 
         running_avg_l2 += float(l2.detach())  # detach to avoid memory leak
         running_avg_comm += float(commloss.detach())
@@ -454,8 +454,8 @@ def train_with_ganloss(
             scheduler.step()
 
             torch.nn.utils.clip_grad_norm_(netD.parameters(), config.max_grad_norm)
-            optimizer_netD.step()
-            optimizer_netD.zero_grad()
+            optimizer_netd.step()
+            optimizer_netd.zero_grad()
 
             torch.nn.utils.clip_grad_norm_(
                 model.vq.decoder.parameters(), config.max_grad_norm
@@ -553,6 +553,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=None)
     parser.add_argument("--alpha", type=float, default=None)
+    parser.add_argument("--gan_weight", type=float, default=None)
     parser.add_argument("--weight_decay", type=float, default=None)
     parser.add_argument("--log_every", type=int, default=None)
     parser.add_argument("--log_rich_media_every", type=int, default=None)
@@ -652,7 +653,7 @@ def main():
         model.parameters(), lr=config.lr, weight_decay=config.weight_decay
     )
 
-    optimizer_netD = torch.optim.AdamW(
+    optimizer_netd = torch.optim.AdamW(
         netD.parameters(), lr=config.lr, weight_decay=config.weight_decay
     )
 
@@ -667,7 +668,7 @@ def main():
         num_training_steps=config.num_training_steps,
     )
 
-    optimizers = [optimizer, optimizer_netD, optimizer_decoder]
+    optimizers = [optimizer, optimizer_netd, optimizer_decoder]
 
     experiment_dir = make_experiment_dir(config.base_dir)
     config.experiment_dir = experiment_dir
@@ -684,9 +685,21 @@ def main():
 
     for epoch in range(config.num_epochs):
 
-        model = train(
-            train_loader, model, optimizers, scheduler, epoch, config, test_loader
-        )
+        if args.do_gan:
+            model = train_with_ganloss(
+                train_loader,
+                model,
+                netD,
+                optimizers,
+                scheduler,
+                epoch,
+                config,
+                test_loader,
+            )
+        else:
+            model = train(
+                train_loader, model, optimizer, scheduler, epoch, config, test_loader
+            )
         print("#" * 80)
         print(f"Epoch {epoch} completed.")
         print("#" * 80)
