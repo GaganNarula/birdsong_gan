@@ -28,7 +28,6 @@ class VQVAEModel(nn.Module):
         self,
         l2_normalize_latents: bool = False,
         scale: float = None,
-        downsample: bool = False,
         layers_per_block: int = 3,
         num_downsample_layers: int = 2,
         num_vq_embeddings: int = 128,
@@ -55,15 +54,15 @@ class VQVAEModel(nn.Module):
         self.latent_height = nfft_half
         self.latent_width = ntimeframes
 
-        if downsample:
+        if num_downsample_layers > 0:
             # downsample for nlayers
             downsample = []
             for layer in range(num_downsample_layers):
                 downsample.append(
                     Downsample2D(
-                        channels=1,
+                        channels=vq_embed_dim,
                         use_conv=True,
-                        out_channels=1,
+                        out_channels=vq_embed_dim,
                         kernel_size=3,
                         padding=0,
                     )
@@ -82,9 +81,9 @@ class VQVAEModel(nn.Module):
             for layer in range(num_downsample_layers):
                 upsample.append(
                     Upsample2D(
-                        channels=1,
+                        channels=vq_embed_dim,
                         use_conv=True,
-                        out_channels=1,
+                        out_channels=vq_embed_dim,
                         kernel_size=3,
                         padding=1,
                     )
@@ -143,7 +142,6 @@ class VQVAEModel(nn.Module):
         model = cls(
             l2_normalize_latents=config["l2_normalize_latents"],
             scale=config["scale"],
-            downsample=config["downsample"],
             num_downsample_layers=config["num_downsample_layers"],
             layers_per_block=config["layers_per_block"],
             num_vq_embeddings=config["num_vq_embeddings"],
@@ -255,7 +253,10 @@ class VQVAEModel(nn.Module):
     def decode_spectrogram_from_codes(self, codes: torch.Tensor) -> torch.Tensor:
         """Decode spectrogram from latent codes."""
         latents = self.vq.quantize.embedding(codes)
+        latents = torch.permute(latents, (0, 3, 1, 2))
+
         xhat = self.decode(latents)  # shape (bsz, 1, nfft//2, ntimeframes)
+
         return self.unchunk_spectrogram(xhat)  # shape (1, nfft//2,  ntimeframes * bsz)
 
     @torch.no_grad()
@@ -276,8 +277,16 @@ class VQVAEModel(nn.Module):
         """Sample from model. First, sample codes from a uniform categorical distribution,
         then fetch the latents, finally, decode the latents into the output space.
         """
+        self.vq.quantize.sane_index_shape = True
         codes = self.sample_uniform_random_codes(size)
+        self.vq.quantize.sane_index_shape = False  # reset to default
+
         latents = self.vq.quantize.embedding(codes)
+
+        latents = torch.permute(
+            latents, (0, 3, 1, 2)
+        )  # shape (bsz, 1, latent_height, latent_width)
+
         return self.decode(latents)  # shape (bsz, 1, nfft//2, ntimeframes)
 
     def forward(
