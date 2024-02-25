@@ -27,8 +27,10 @@ gan_criterion = torch.nn.BCELoss()
 
 def gan_loss(discriminator: _netD, real: torch.Tensor, fake: torch.Tensor):
     """Compute GAN loss for discriminator and generator."""
-    real_loss = gan_criterion(discriminator(real), torch.ones_like(real))
-    fake_loss = gan_criterion(discriminator(fake), torch.zeros_like(fake))
+    pred_real = discriminator(real)
+    pred_fake = discriminator(fake)
+    real_loss = gan_criterion(pred_real, torch.ones_like(pred_real))
+    fake_loss = gan_criterion(pred_fake, torch.zeros_like(pred_fake))
     return real_loss + fake_loss
 
 
@@ -45,7 +47,7 @@ def make_experiment_dir(base_path: str) -> str:
 class TrainingConfig:
     """Configuration for training VQ-VAE."""
 
-    downsample: bool = True
+    do_gan: bool = False
     num_downsample_layers: int = 2
     lr: float = 2e-5
     scheduler: str = "cosine"
@@ -55,6 +57,8 @@ class TrainingConfig:
     scale: float = None  # scale for codebook initialization
     eval_every: int = 500
     batch_size: int = 250
+    discriminator_channel_multiplier: int = 128
+    train_generator_every: int = 2
     gradient_accumulation_steps: int = 1
     alpha: float = 10.0  # weight for commitment loss
     gan_weight: float = 0.5  # weight for gan loss
@@ -77,10 +81,10 @@ class TrainingConfig:
     num_vq_embeddings: int = 2000
     layers_per_block: int = 3
     train_dataset_path: str = (
-        "/media/gagan/Gagan_external/songbird_data/age_resampled_hfdataset/train"
+        "/home/gagan/ek_processed_data/age_resampled_hfdataset/train"
     )
     test_dataset_path: str = (
-        "/media/gagan/Gagan_external/songbird_data/age_resampled_hfdataset/test"
+        "/home/gagan/ek_processed_data/age_resampled_hfdataset/test"
     )
     base_dir: str = "/home/gagan/ek_experiments/vqvae"
     experiment_dir: str = ""  # will be set later
@@ -259,14 +263,26 @@ def logging(
     epoch: int,
     batch: int,
     config,
+    gan_loss_discriminator: float = None,
+    gan_loss_generator: float = None,
 ) -> None:
     """Logs losses to wandb and prints / saves figures to disk, checkpoints model."""
-    l2 = float(l2.detach())
-    commloss = float(commloss.detach())
 
     if (batch + 1) % config.log_every == 0:
+
+        l2 = float(l2.detach())
+        commloss = float(commloss.detach())
+        gan_loss_discriminator /= batch
+        gan_loss_generator /= batch
         print(f"L2 loss at epoch={epoch}, batch={batch} is = {l2: .5f}")
         print(f"Comm loss at epoch={epoch}, batch={batch} is = {commloss: .5f}")
+        print(
+            f"GAN loss discriminator at epoch={epoch}, batch={batch} is = {gan_loss_discriminator: .5f}"
+        )
+        print(
+            f"GAN loss generator at epoch={epoch}, batch={batch} is = {gan_loss_generator: .5f}"
+        )
+
         # log to wandb
         wandb.log(
             {
@@ -274,6 +290,8 @@ def logging(
                 "running_avg_commitment_loss": running_avg_comm / batch,
                 "L2_loss": l2,
                 "commitment_loss": commloss,
+                "gan_loss_discriminator": gan_loss_discriminator,
+                "gan_loss_generator": gan_loss_generator,
             }
         )
 
@@ -383,9 +401,9 @@ def train(
 def train_with_ganloss(
     dataloader: DataLoader,
     model: VQVAEModel,
-    netD: _netD,
+    discriminator: _netD,
     optimizers: list[torch.optim.Optimizer],
-    scheduler,
+    schedulers,
     epoch: int,
     config: TrainingConfig,
     test_dataloader: DataLoader = None,
@@ -395,7 +413,7 @@ def train_with_ganloss(
     Args:
         dataloader (torch.utils.data.DataLoader): dataloader for training data
         model (VQVAEModel): VQ-VAE model
-        netD (_netD): discriminator
+        discriminator (_discriminator): discriminator
         optimizer (torch.optim.Optimizer): optimizer
         scheduler (torch.optim.lr_scheduler): learning rate scheduler
         epoch (int): current epoch
@@ -409,8 +427,10 @@ def train_with_ganloss(
     running_avg_comm = 0.0
     running_avg_gan_discriminator_loss = 0.0
     running_avg_gan_generator_loss = 0.0
-    train_discriminator = True
-    optimizer, optimizer_netd, optimizer_decoder = optimizers
+
+    # unpack optimizers
+    optimizer, optimizer_discriminator, optimizer_decoder = optimizers
+    scheduler, scheduler_discriminator, scheduler_decoder = schedulers
 
     for i, x in enumerate(dataloader):
 
@@ -422,49 +442,54 @@ def train_with_ganloss(
 
         total_loss = l2 + config.alpha * commloss
 
-        # generate fake data
-        fake = model.sample(codes.size())
-
-        # compute gan loss for discriminator
-        if train_discriminator:
-            gan_loss_d = gan_loss(netD, x, fake.detach())
-            gan_loss_d /= config.gradient_accumulation_steps
-            gan_loss_d.backward()
-            train_discriminator = False
-            running_avg_gan_discriminator_loss += float(gan_loss_d.detach())
-
-        else:
-            # compute gan loss for generator, add to total loss
-            gan_loss_g = gan_loss(netD, fake, x)
-            total_loss += config.gan_weight * gan_loss_g
-            train_discriminator = True
-            running_avg_gan_generator_loss += float(gan_loss_g.detach())
-
         total_loss /= config.gradient_accumulation_steps
         total_loss.backward()
 
-        running_avg_l2 += float(l2.detach())  # detach to avoid memory leak
-        running_avg_comm += float(commloss.detach())
+        torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
+        optimizer.step()
+        optimizer.zero_grad()
+        scheduler.step()
 
-        if (i + 1) % config.gradient_accumulation_steps == 0:
+        if (i + 1) % config.train_generator_every == 0:
+            # compute gan loss for generator
+            fake = model.sample((x.size(0), model.latent_height, model.latent_width))
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
-            optimizer.step()
-            optimizer.zero_grad()
-            scheduler.step()
-
-            torch.nn.utils.clip_grad_norm_(netD.parameters(), config.max_grad_norm)
-            optimizer_netd.step()
-            optimizer_netd.zero_grad()
+            gan_loss_g = gan_loss(discriminator, fake, x)
+            gan_loss_g *= config.gan_weight
+            gan_loss_g.backward()
 
             torch.nn.utils.clip_grad_norm_(
                 model.vq.decoder.parameters(), config.max_grad_norm
             )
             optimizer_decoder.step()
             optimizer_decoder.zero_grad()
+            scheduler_decoder.step()
 
-            if (i + 1) % config.log_every == 0:
-                print(f"Latest learning rate: {scheduler.get_last_lr()}")
+            running_avg_gan_generator_loss += float(gan_loss_g.detach())
+
+        else:
+            # compute gan loss for discriminator
+            # generate fake data
+            fake = model.sample((x.size(0), model.latent_height, model.latent_width))
+
+            gan_loss_d = gan_loss(discriminator, x, fake.detach())
+            gan_loss_d.backward()
+            torch.nn.utils.clip_grad_norm_(
+                discriminator.parameters(), config.max_grad_norm
+            )
+            optimizer_discriminator.step()
+            optimizer_discriminator.zero_grad()
+            scheduler_discriminator.step()
+
+            running_avg_gan_discriminator_loss += float(gan_loss_d.detach())
+
+        running_avg_l2 += float(l2.detach())  # detach to avoid memory leak
+        running_avg_comm += float(commloss.detach())
+
+        # if (i + 1) % config.gradient_accumulation_steps == 0:
+
+        if (i + 1) % config.log_every == 0:
+            print(f"Latest learning rate: {scheduler.get_last_lr()}")
 
         model, encoding_indices = logging(
             model,
@@ -478,6 +503,8 @@ def train_with_ganloss(
             epoch,
             i,
             config,
+            running_avg_gan_discriminator_loss,
+            running_avg_gan_generator_loss,
         )
 
         if test_dataloader is not None and (i + 1) % config.eval_every == 0:
@@ -540,7 +567,9 @@ def main():
     """Main function for training VQ-VAE."""
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--downsample", action="store_true")
+    parser.add_argument("--do_gan", action="store_true")
+    parser.add_argument("--discriminator_channel_multiplier", type=int, default=None)
+    parser.add_argument("--train_generator_every", type=int, default=None)
     parser.add_argument("--num_downsample_layers", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--scheduler", type=str, default=None)
@@ -632,7 +661,6 @@ def main():
     model = VQVAEModel(
         l2_normalize_latents=config.l2_normalize_latents,
         scale=config.scale,
-        downsample=config.downsample,
         num_downsample_layers=config.num_downsample_layers,
         layers_per_block=config.layers_per_block,
         num_vq_embeddings=config.num_vq_embeddings,
@@ -644,21 +672,8 @@ def main():
     model.to(config.device)
     model.train()
 
-    # create discriminator
-    netD = _netD(ndf=64, nc=1)
-    netD.to(config.device)
-    netD.train()
-
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config.lr, weight_decay=config.weight_decay
-    )
-
-    optimizer_netd = torch.optim.AdamW(
-        netD.parameters(), lr=config.lr, weight_decay=config.weight_decay
-    )
-
-    optimizer_decoder = torch.optim.AdamW(
-        model.vq.decoder.parameters(), lr=config.lr, weight_decay=config.weight_decay
     )
 
     scheduler = get_scheduler(
@@ -668,7 +683,40 @@ def main():
         num_training_steps=config.num_training_steps,
     )
 
-    optimizers = [optimizer, optimizer_netd, optimizer_decoder]
+    # create discriminator
+    if args.do_gan:
+
+        discriminator = _netD(ndf=config.discriminator_channel_multiplier, nc=1)
+        discriminator.to(config.device)
+        discriminator.train()
+
+        optimizer_discriminator = torch.optim.AdamW(
+            discriminator.parameters(), lr=config.lr, weight_decay=config.weight_decay
+        )
+
+        optimizer_decoder = torch.optim.AdamW(
+            model.vq.decoder.parameters(),
+            lr=config.lr,
+            weight_decay=config.weight_decay,
+        )
+
+        optimizers = [optimizer, optimizer_discriminator, optimizer_decoder]
+        # create schedulers
+        scheduler_discriminator = get_scheduler(
+            config.scheduler,
+            optimizer_discriminator,
+            num_warmup_steps=config.num_warmup_steps,
+            num_training_steps=config.num_training_steps,
+        )
+
+        scheduler_decoder = get_scheduler(
+            config.scheduler,
+            optimizer_decoder,
+            num_warmup_steps=config.num_warmup_steps,
+            num_training_steps=config.num_training_steps,
+        )
+
+        schedulers = [scheduler, scheduler_discriminator, scheduler_decoder]
 
     experiment_dir = make_experiment_dir(config.base_dir)
     config.experiment_dir = experiment_dir
@@ -689,9 +737,9 @@ def main():
             model = train_with_ganloss(
                 train_loader,
                 model,
-                netD,
+                discriminator,
                 optimizers,
-                scheduler,
+                schedulers,
                 epoch,
                 config,
                 test_loader,
