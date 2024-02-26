@@ -58,7 +58,7 @@ class TrainingConfig:
     eval_every: int = 500
     batch_size: int = 250
     discriminator_channel_multiplier: int = 128
-    train_generator_every: int = 2
+    train_generator_every: int = 3
     gradient_accumulation_steps: int = 1
     alpha: float = 10.0  # weight for commitment loss
     gan_weight: float = 0.5  # weight for gan loss
@@ -445,25 +445,20 @@ def train_with_ganloss(
         total_loss /= config.gradient_accumulation_steps
         total_loss.backward()
 
-        torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
-        optimizer.step()
-        optimizer.zero_grad()
-        scheduler.step()
-
         if (i + 1) % config.train_generator_every == 0:
             # compute gan loss for generator
             fake = model.sample((x.size(0), model.latent_height, model.latent_width))
 
-            gan_loss_g = gan_loss(discriminator, fake, x)
-            gan_loss_g *= config.gan_weight
-            gan_loss_g.backward()
+            gan_loss_g = config.gan_weight * gan_loss(discriminator, fake, x)
+            total_loss += gan_loss_g
+            # gan_loss_g.backward()
 
-            torch.nn.utils.clip_grad_norm_(
-                model.vq.decoder.parameters(), config.max_grad_norm
-            )
-            optimizer_decoder.step()
-            optimizer_decoder.zero_grad()
-            scheduler_decoder.step()
+            # torch.nn.utils.clip_grad_norm_(
+            #     model.vq.decoder.parameters(), config.max_grad_norm
+            # )
+            # optimizer_decoder.step()
+            # optimizer_decoder.zero_grad()
+            # scheduler_decoder.step()
 
             running_avg_gan_generator_loss += float(gan_loss_g.detach())
 
@@ -482,6 +477,11 @@ def train_with_ganloss(
             scheduler_discriminator.step()
 
             running_avg_gan_discriminator_loss += float(gan_loss_d.detach())
+
+        torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
+        optimizer.step()
+        optimizer.zero_grad()
+        scheduler.step()
 
         running_avg_l2 += float(l2.detach())  # detach to avoid memory leak
         running_avg_comm += float(commloss.detach())
