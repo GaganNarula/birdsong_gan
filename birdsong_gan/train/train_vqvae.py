@@ -429,8 +429,8 @@ def train_with_ganloss(
     running_avg_gan_generator_loss = 0.0
 
     # unpack optimizers
-    optimizer, optimizer_discriminator, optimizer_decoder = optimizers
-    scheduler, scheduler_discriminator, scheduler_decoder = schedulers
+    optimizer, optimizer_discriminator = optimizers
+    scheduler, scheduler_discriminator = schedulers
 
     for i, x in enumerate(dataloader):
 
@@ -443,41 +443,35 @@ def train_with_ganloss(
         total_loss = l2 + config.alpha * commloss
 
         total_loss /= config.gradient_accumulation_steps
+        # total_loss.backward()
+
+        # if (i + 1) % config.train_generator_every == 0:
+        # compute gan loss for generator
+        fake = model.sample((x.size(0), model.latent_height, model.latent_width))
+
+        gan_loss_g = config.gan_weight * gan_loss(discriminator, fake, x)
+        total_loss += gan_loss_g
         total_loss.backward()
 
-        if (i + 1) % config.train_generator_every == 0:
-            # compute gan loss for generator
-            fake = model.sample((x.size(0), model.latent_height, model.latent_width))
+        running_avg_gan_generator_loss += float(gan_loss_g.detach())
 
-            gan_loss_g = config.gan_weight * gan_loss(discriminator, fake, x)
-            total_loss += gan_loss_g
-            # gan_loss_g.backward()
+        # else:
+        # compute gan loss for discriminator
+        # generate fake data
+        fake = model.sample((x.size(0), model.latent_height, model.latent_width))
 
-            # torch.nn.utils.clip_grad_norm_(
-            #     model.vq.decoder.parameters(), config.max_grad_norm
-            # )
-            # optimizer_decoder.step()
-            # optimizer_decoder.zero_grad()
-            # scheduler_decoder.step()
+        gan_loss_d = gan_loss(discriminator, x, fake.detach())
+        gan_loss_d.backward()
 
-            running_avg_gan_generator_loss += float(gan_loss_g.detach())
+        # update discriminator
+        torch.nn.utils.clip_grad_norm_(discriminator.parameters(), config.max_grad_norm)
+        optimizer_discriminator.step()
+        optimizer_discriminator.zero_grad()
+        scheduler_discriminator.step()
 
-        else:
-            # compute gan loss for discriminator
-            # generate fake data
-            fake = model.sample((x.size(0), model.latent_height, model.latent_width))
+        running_avg_gan_discriminator_loss += float(gan_loss_d.detach())
 
-            gan_loss_d = gan_loss(discriminator, x, fake.detach())
-            gan_loss_d.backward()
-            torch.nn.utils.clip_grad_norm_(
-                discriminator.parameters(), config.max_grad_norm
-            )
-            optimizer_discriminator.step()
-            optimizer_discriminator.zero_grad()
-            scheduler_discriminator.step()
-
-            running_avg_gan_discriminator_loss += float(gan_loss_d.detach())
-
+        # update VQVAE
         torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
         optimizer.step()
         optimizer.zero_grad()
@@ -694,13 +688,13 @@ def main():
             discriminator.parameters(), lr=config.lr, weight_decay=config.weight_decay
         )
 
-        optimizer_decoder = torch.optim.AdamW(
-            model.vq.decoder.parameters(),
-            lr=config.lr,
-            weight_decay=config.weight_decay,
-        )
+        # optimizer_decoder = torch.optim.AdamW(
+        #     model.vq.decoder.parameters(),
+        #     lr=config.lr,
+        #     weight_decay=config.weight_decay,
+        # )
 
-        optimizers = [optimizer, optimizer_discriminator, optimizer_decoder]
+        optimizers = [optimizer, optimizer_discriminator]
         # create schedulers
         scheduler_discriminator = get_scheduler(
             config.scheduler,
@@ -709,14 +703,14 @@ def main():
             num_training_steps=config.num_training_steps,
         )
 
-        scheduler_decoder = get_scheduler(
-            config.scheduler,
-            optimizer_decoder,
-            num_warmup_steps=config.num_warmup_steps,
-            num_training_steps=config.num_training_steps,
-        )
+        # scheduler_decoder = get_scheduler(
+        #     config.scheduler,
+        #     optimizer_decoder,
+        #     num_warmup_steps=config.num_warmup_steps,
+        #     num_training_steps=config.num_training_steps,
+        # )
 
-        schedulers = [scheduler, scheduler_discriminator, scheduler_decoder]
+        schedulers = [scheduler, scheduler_discriminator]
 
     experiment_dir = make_experiment_dir(config.base_dir)
     config.experiment_dir = experiment_dir
