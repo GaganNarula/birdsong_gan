@@ -426,14 +426,14 @@ def train_with_ganloss(
         total_loss = l2 + config.alpha * commloss
 
         total_loss /= config.gradient_accumulation_steps
+        total_loss.backward()
 
         if (i + 1) % config.train_generator_every == 0:
             # compute gan loss for generator
             fake = model.sample((x.size(0), model.latent_height, model.latent_width))
 
             gan_loss_g = config.gan_weight * gan_loss(discriminator, fake, x)
-            total_loss += gan_loss_g
-            total_loss.backward()
+            gan_loss_g.backward()
 
             gan_loss_g = float(gan_loss_g.detach())
             running_avg_gan_generator_loss += gan_loss_g
@@ -457,21 +457,18 @@ def train_with_ganloss(
             gan_loss_d = float(gan_loss_d.detach())
             running_avg_gan_discriminator_loss += gan_loss_d
 
-            # update VQVAE
-            total_loss.backward()
-
-        # update VQVAE
-        torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
-        optimizer.step()
-        optimizer.zero_grad()
-        scheduler.step()
-
         l2 = float(l2.detach())
         commloss = float(commloss.detach())
         running_avg_l2 += l2
         running_avg_comm += commloss
 
-        # if (i + 1) % config.gradient_accumulation_steps == 0:
+        # WARNING! Gan loss is not divided by gradient accumulation steps!
+        if (i + 1) % config.gradient_accumulation_steps == 0:
+            # update VQVAE
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
+            optimizer.step()
+            optimizer.zero_grad()
+            scheduler.step()
 
         if (i + 1) % config.log_every == 0:
             print(f"Latest learning rate: {scheduler.get_last_lr()}")
