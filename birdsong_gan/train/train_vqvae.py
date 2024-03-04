@@ -256,44 +256,22 @@ def logging(
     x: torch.Tensor,
     xhat: torch.Tensor,
     encoding_indices: list[np.ndarray],
-    running_avg_comm: float,
-    running_avg_l2: float,
-    l2: float,
-    commloss: float,
+    losses: dict,
     epoch: int,
     batch: int,
     config,
-    gan_loss_discriminator: float = None,
-    gan_loss_generator: float = None,
 ) -> None:
     """Logs losses to wandb and prints / saves figures to disk, checkpoints model."""
 
     if (batch + 1) % config.log_every == 0:
 
-        l2 = float(l2.detach())
-        commloss = float(commloss.detach())
-        gan_loss_discriminator /= batch
-        gan_loss_generator /= batch
-        print(f"L2 loss at epoch={epoch}, batch={batch} is = {l2: .5f}")
-        print(f"Comm loss at epoch={epoch}, batch={batch} is = {commloss: .5f}")
-        print(
-            f"GAN loss discriminator at epoch={epoch}, batch={batch} is = {gan_loss_discriminator: .5f}"
-        )
-        print(
-            f"GAN loss generator at epoch={epoch}, batch={batch} is = {gan_loss_generator: .5f}"
-        )
+        # print losses to console
+        print(f"Epoch {epoch}, Batch {batch}")
+        for k, v in losses.items():
+            print(f"{k}: {v}")
 
         # log to wandb
-        wandb.log(
-            {
-                "running_avg_L2_loss": running_avg_l2 / batch,
-                "running_avg_commitment_loss": running_avg_comm / batch,
-                "L2_loss": l2,
-                "commitment_loss": commloss,
-                "gan_loss_discriminator": gan_loss_discriminator,
-                "gan_loss_generator": gan_loss_generator,
-            }
-        )
+        wandb.log(losses)
 
     if (batch + 1) % config.log_rich_media_every == 0:
         plot_reconstruction_and_original(x, xhat, epoch, batch, config.experiment_dir)
@@ -366,8 +344,10 @@ def train(
         total_loss /= config.gradient_accumulation_steps
         total_loss.backward()
 
-        running_avg_l2 += float(l2.detach())  # detach to avoid memory leak
-        running_avg_comm += float(commloss.detach())
+        l2 = float(l2.detach())
+        running_avg_l2 += l2  # detach to avoid memory leak
+        commloss = float(commloss.detach())
+        running_avg_comm += commloss
 
         if (i + 1) % config.gradient_accumulation_steps == 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
@@ -377,22 +357,25 @@ def train(
             if (i + 1) % config.log_every == 0:
                 print(f"Latest learning rate: {scheduler.get_last_lr()}")
 
-        model, encoding_indices = logging(
-            model,
-            x,
-            xhat,
-            encoding_indices,
-            running_avg_comm,
-            running_avg_l2,
-            l2,
-            commloss,
-            epoch,
-            i,
-            config,
-        )
+        if i > 0:
+            model, encoding_indices = logging(
+                model,
+                x,
+                xhat,
+                encoding_indices,
+                losses={
+                    "L2_loss": l2,
+                    "commitment_loss": commloss,
+                    "running_avg_L2_loss": running_avg_l2 / i,
+                    "running_avg_commitment_loss": running_avg_comm / i,
+                },
+                epoch=epoch,
+                batch=i,
+                config=config,
+            )
 
         if test_dataloader is not None and (i + 1) % config.eval_every == 0:
-            print("Evaluating on test set...")
+            print("### Evaluating on test set ###")
             model = evaluate(test_dataloader, model, config)
 
     return model
@@ -443,33 +426,39 @@ def train_with_ganloss(
         total_loss = l2 + config.alpha * commloss
 
         total_loss /= config.gradient_accumulation_steps
-        # total_loss.backward()
 
-        # if (i + 1) % config.train_generator_every == 0:
-        # compute gan loss for generator
-        fake = model.sample((x.size(0), model.latent_height, model.latent_width))
+        if (i + 1) % config.train_generator_every == 0:
+            # compute gan loss for generator
+            fake = model.sample((x.size(0), model.latent_height, model.latent_width))
 
-        gan_loss_g = config.gan_weight * gan_loss(discriminator, fake, x)
-        total_loss += gan_loss_g
-        total_loss.backward()
+            gan_loss_g = config.gan_weight * gan_loss(discriminator, fake, x)
+            total_loss += gan_loss_g
+            total_loss.backward()
 
-        running_avg_gan_generator_loss += float(gan_loss_g.detach())
+            gan_loss_g = float(gan_loss_g.detach())
+            running_avg_gan_generator_loss += gan_loss_g
 
-        # else:
-        # compute gan loss for discriminator
-        # generate fake data
-        fake = model.sample((x.size(0), model.latent_height, model.latent_width))
+        else:
+            # compute gan loss for discriminator
+            # generate fake data
+            fake = model.sample((x.size(0), model.latent_height, model.latent_width))
 
-        gan_loss_d = gan_loss(discriminator, x, fake.detach())
-        gan_loss_d.backward()
+            gan_loss_d = gan_loss(discriminator, x, fake.detach())
+            gan_loss_d.backward()
 
-        # update discriminator
-        torch.nn.utils.clip_grad_norm_(discriminator.parameters(), config.max_grad_norm)
-        optimizer_discriminator.step()
-        optimizer_discriminator.zero_grad()
-        scheduler_discriminator.step()
+            # update discriminator
+            torch.nn.utils.clip_grad_norm_(
+                discriminator.parameters(), config.max_grad_norm
+            )
+            optimizer_discriminator.step()
+            optimizer_discriminator.zero_grad()
+            scheduler_discriminator.step()
 
-        running_avg_gan_discriminator_loss += float(gan_loss_d.detach())
+            gan_loss_d = float(gan_loss_d.detach())
+            running_avg_gan_discriminator_loss += gan_loss_d
+
+            # update VQVAE
+            total_loss.backward()
 
         # update VQVAE
         torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
@@ -477,29 +466,38 @@ def train_with_ganloss(
         optimizer.zero_grad()
         scheduler.step()
 
-        running_avg_l2 += float(l2.detach())  # detach to avoid memory leak
-        running_avg_comm += float(commloss.detach())
+        l2 = float(l2.detach())
+        commloss = float(commloss.detach())
+        running_avg_l2 += l2
+        running_avg_comm += commloss
 
         # if (i + 1) % config.gradient_accumulation_steps == 0:
 
         if (i + 1) % config.log_every == 0:
             print(f"Latest learning rate: {scheduler.get_last_lr()}")
 
-        model, encoding_indices = logging(
-            model,
-            x,
-            xhat,
-            encoding_indices,
-            running_avg_comm,
-            running_avg_l2,
-            l2,
-            commloss,
-            epoch,
-            i,
-            config,
-            running_avg_gan_discriminator_loss,
-            running_avg_gan_generator_loss,
-        )
+        if i > 0:
+            model, encoding_indices = logging(
+                model,
+                x,
+                xhat,
+                encoding_indices,
+                losses={
+                    "L2_loss": l2,
+                    "commitment_loss": commloss,
+                    "gan_discriminator_loss": gan_loss_d,
+                    "gan_generator_loss": gan_loss_g,
+                    "running_avg_L2_loss": running_avg_l2 / i,
+                    "running_avg_commitment_loss": running_avg_comm / i,
+                    "running_avg_gan_discriminator_loss": running_avg_gan_discriminator_loss
+                    / i,
+                    "running_avg_gan_generator_loss": running_avg_gan_generator_loss
+                    / i,
+                },
+                epoch=epoch,
+                batch=i,
+                config=config,
+            )
 
         if test_dataloader is not None and (i + 1) % config.eval_every == 0:
             print("Evaluating on test set...")
@@ -553,7 +551,7 @@ def evaluate(test_dataloader, model, config) -> VQVAEModel:
     )
     print(f"L2 loss on test set: {l2_loss}")
     print(f"Commitment loss on test set: {commitment_loss}")
-
+    print("### Test set evaluation complete ###")
     return model.train()
 
 
