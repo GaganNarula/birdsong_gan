@@ -2,7 +2,7 @@ import os
 import tqdm
 import numpy as np
 import torch
-from datasets import load_from_disk, Dataset
+from datasets import load_from_disk, Dataset, concatenate_datasets
 from birdsong_gan.models.vqvae import VQVAEModel
 
 
@@ -47,20 +47,40 @@ def main(args):
         encoded_data["recording_date"].append(example["recording_date"])
 
         if (idx + 1) % args.write_batch_size == 0:
-            # remove any folder starting with 'encoded_data'
-            os.system(f"rm -rf {args.output_path}/encoded_data*")
 
             # save intermediate results
             datatosave = Dataset.from_dict(encoded_data)
             datatosave.save_to_disk(
                 os.path.join(args.output_path, f"encoded_data_{idx + 1}")
             )
+            encoded_data = {
+                "codes": [],
+                "bird_name": [],
+                "days_post_hatch": [],
+                "recording_date": [],
+            }
 
     # save last batch
     datatosave = Dataset.from_dict(encoded_data)
     datatosave.save_to_disk(
         os.path.join(args.output_path, f"encoded_data_{len(dataset)}")
     )
+
+    print("Encoding complete.")
+
+    # combine all the batches
+    print("Combining all the batches...")
+    combined_data = []
+    for root, _, files in os.walk(args.output_path):
+        for file in files:
+            if file.startswith("encoded_data"):
+                combined_data.append(load_from_disk(os.path.join(root, file)))
+
+    combined_data = concatenate_datasets(combined_data)
+
+    # save the combined data
+    print("Saving the combined data...")
+    combined_data.save_to_disk(os.path.join(args.output_path, "encoded_data"))
 
 
 if __name__ == "__main__":
