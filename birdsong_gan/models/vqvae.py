@@ -67,12 +67,19 @@ class VQVAEModel(nn.Module):
                         padding=0,
                     )
                 )
-                # do not add silu if last layer
-                if layer != num_downsample_layers - 1:
-                    downsample.append(nn.SiLU())
 
                 self.latent_height = self.latent_height // 2
                 self.latent_width = self.latent_width // 2
+
+                # do not add silu or layernorm if last layer
+                if layer != num_downsample_layers - 1:
+                    downsample.append(nn.SiLU())
+                    # add layernorm on 2024-03-07
+                    downsample.append(
+                        nn.LayerNorm(
+                            [vq_embed_dim, self.latent_height, self.latent_width]
+                        )
+                    )
 
             self.downsample = nn.Sequential(*downsample)
 
@@ -88,9 +95,12 @@ class VQVAEModel(nn.Module):
                         padding=1,
                     )
                 )
-                # do not add silu if last layer
+                # do not add silu or layernorm if last layer
                 if layer != num_downsample_layers - 1:
                     upsample.append(nn.SiLU())
+                    lheight = self.latent_height * (2 ** (layer + 1))
+                    lwidth = self.latent_width * (2 ** (layer + 1))
+                    upsample.append(nn.LayerNorm([vq_embed_dim, lheight, lwidth]))
 
             self.upsample = nn.Sequential(*upsample)
 
